@@ -1,0 +1,70 @@
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+FIRST_RUN_LOGIN = False
+AUTH_URL = "https://gmgn.ai/tglogin?user_id=53b06598-3e2b-4d2f-aec6-f2e5881def90&code=10355196-216d-4f12-bbf3-5407abb1eb6c&id=0eae54fb142533ac"
+
+LOG_FILE = str(BASE_DIR / "twitter_monitor.log")
+USER_DATA_DIR = str(BASE_DIR / "browser_data")
+SCREENSHOT_PATH = str(BASE_DIR / "monitor_running.png")
+MONITOR_URL = "https://gmgn.ai/follow?target=xTracker&chain=bsc"
+PROXY_SERVER = "socks5://127.0.0.1:40000"
+WATCHDOG_TIMEOUT = 120
+WATCHDOG_POLL_INTERVAL = 5
+XVFB_WIDTH = 1920
+XVFB_HEIGHT = 1080
+
+# ---------- WebSocket 分发配置 ----------
+WS_HOST = "0.0.0.0"
+WS_PORT = 8765
+WS_TOKEN = os.getenv("WS_TOKEN", "change-me-to-a-strong-token")
+WS_HEARTBEAT_INTERVAL = 30
+
+# ---------- Telegram 推送配置 ----------
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
+TG_ENABLE_DEFAULT = os.getenv("TG_ENABLE_DEFAULT", "False").lower() in ("true", "1", "yes")
+TG_CHANNEL_ID = os.getenv("TG_CHANNEL_ID", "")
+
+# 动态解析路由分组
+TG_CHANNEL_MAP: dict[str, list[str]] = {}
+_routing_handles = set()
+
+for k, v in os.environ.items():
+    if k.startswith("TG_ROUTING_") and v:
+        group_name = k[len("TG_ROUTING_"):]
+        enable_str = os.getenv(f"TG_ENABLE_{group_name}", "True").lower()
+        if enable_str not in ("true", "1", "yes"):
+            continue  # 若该分组关闭推送，则忽略
+
+        channel_id = os.getenv(f"TG_CHANNEL_ID_{group_name}")
+        if channel_id:
+            handles = [h.strip().lower() for h in v.split(",") if h.strip()]
+            for h in handles:
+                if h not in TG_CHANNEL_MAP:
+                    TG_CHANNEL_MAP[h] = []
+                if channel_id not in TG_CHANNEL_MAP[h]:
+                    TG_CHANNEL_MAP[h].append(channel_id)
+                _routing_handles.add(h)
+
+TG_FILTER_HANDLES = [
+    h.strip().lower()
+    for h in os.getenv("TG_FILTER_HANDLES", "").split(",")
+    if h.strip()
+]
+# 自动将启用路由组中的博主并入全局监控白名单
+if _routing_handles:
+    TG_FILTER_HANDLES = list(set(TG_FILTER_HANDLES) | _routing_handles)
+
+# ---------- Webhook 推送配置 ----------
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+
+# ---------- DeepSeek 翻译配置 ----------
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODEL = "deepseek-chat"

@@ -1,0 +1,18 @@
+[Unit]
+Description=Gmgn Twitter Monitor Service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/workspace/GmgnTwitterClaw
+Environment="PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/home/ubuntu/.local/bin/uv run python gmgn_twitter_monitor.py
+Restart=always
+RestartSec=10
+RuntimeMaxSec=43200
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

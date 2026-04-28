@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.log
+_run_*.py
+browser_data/
+monitor_running.png
+.env
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
