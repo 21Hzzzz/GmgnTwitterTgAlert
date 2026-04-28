@@ -294,7 +294,7 @@ class TelegramDistributor(BaseDistributor):
             logger.error(f"📱 TG 推送未知异常: {e}")
             return None
 
-    async def _translate_and_edit(self, message_id: int, header: str, footer: str, message: dict, target_channel_id: str) -> None:
+    async def _translate_and_edit(self, message_id: int, header: str, footer: str, message: dict, target_channel_id: str, link_preview_options: dict | None = None) -> None:
         """异步翻译推文并编辑已发送的 TG 消息，将中文翻译追加到中间。"""
         content = message.get("content", {}) or {}
         reference = message.get("reference") or {}
@@ -327,8 +327,11 @@ class TelegramDistributor(BaseDistributor):
             "message_id": message_id,
             "text": new_text[:4096],
             "parse_mode": "HTML",
-            "disable_web_page_preview": False,
         }
+        # 保持与 sendMessage 一致的预览设置，防止编辑时卡片丢失
+        if link_preview_options:
+            payload["link_preview_options"] = link_preview_options
+
         result = await self._send_api("editMessageText", payload)
 
         if result and result.get("ok"):
@@ -415,7 +418,7 @@ class TelegramDistributor(BaseDistributor):
 
             if msg_id:
                 asyncio.create_task(
-                    self._translate_and_edit(msg_id, header, footer, message, target_channel_id)
+                    self._translate_and_edit(msg_id, header, footer, message, target_channel_id, link_preview_options)
                 )
 
     async def distribute(self, message: dict) -> None:
