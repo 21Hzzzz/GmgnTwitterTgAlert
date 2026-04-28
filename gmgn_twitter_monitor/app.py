@@ -219,7 +219,53 @@ async def main():
                     ws.on("framereceived", lambda frame: handle_ws_frame(frame))
                     ws.on("close", lambda _: connected_ws.discard(ws.url))
 
+            async def handle_http_response(response):
+                """拦截 Socket.io HTTP 降级轮询响应，防止 WS 重连间隙漏消息。"""
+                try:
+                    if "gmgn.ai/ws" not in response.url or "transport=polling" not in response.url:
+                        return
+                    if response.status != 200:
+                        return
+
+                    text = await response.text()
+                    if '42["message"' not in text:
+                        return
+
+                    # Engine.IO v4 Polling 格式: "长度:消息内容长度:消息内容..."
+                    idx = 0
+                    while idx < len(text):
+                        colon_idx = text.find(':', idx)
+                        if colon_idx == -1:
+                            break
+                        length_str = text[idx:colon_idx]
+                        if not length_str.isdigit():
+                            break
+                        msg_len = int(length_str)
+                        msg_start = colon_idx + 1
+                        msg_end = msg_start + msg_len
+                        if msg_end > len(text):
+                            break
+                        msg_content = text[msg_start:msg_end]
+
+                        if msg_content.startswith('42'):
+                            # 复用 parse_socketio_payload，确保与 WS 通道完全一致的
+                            # 频道过滤 (twitter_user_monitor_basic) + 字符串反序列化
+                            parsed = parse_socketio_payload(msg_content)
+                            if parsed:
+                                watchdog.feed()
+                                logger.info(f"📦 原始解析消息(Polling): {json.dumps(parsed, ensure_ascii=False)}")
+                                triggers_map = extract_triggers_map(parsed["data"])
+                                for item in parsed["data"]:
+                                    deduplicator.process(item)
+                                if triggers_map:
+                                    logger.info(f"🎯 动作提取简报(Polling): {triggers_map}")
+
+                        idx = msg_end
+                except Exception as e:
+                    logger.debug(f"Polling 响应解析跳过: {e}")
+
             page.on("websocket", on_web_socket)
+            page.on("response", handle_http_response)
 
             await browser.run_first_login_if_needed()
             await browser.goto_monitor_page()

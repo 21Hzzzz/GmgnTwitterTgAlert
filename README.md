@@ -1,20 +1,60 @@
-# Gmgn Twitter Monitor 迁移与部署指南
+# GmgnTwitterClaw 🦅
 
-这份文档记录了本项目在全新的无显卡（Headless）Linux VPS 上从零开始运行所需的所有"脚手架"命令。
-如果你需要将此爬虫/监控程序迁移到其他的服务器，请严格按照以下步骤依次执行。
+**基于 GMGN.ai 的实时 Twitter KOL 监控引擎**，通过浏览器自动化拦截 WebSocket 数据流，将推特动态标准化后实时分发至 Telegram 频道、WebSocket 广播和 Webhook 三大通道。
 
-## 💡 FAQ: 首次授权与账号准备必读
+### ✨ 核心特性
+
+- **全动作捕获**：覆盖发推、转推、回复、引用、关注/取关、删帖、换头像、改昵称、改简介共 10 种推特行为
+- **FxTwitter / vxTwitter 富文本卡片**：推文自动渲染为带图/视频的嵌入式预览卡片，关注/取关等主页类动作自动渲染为用户名片
+- **DeepSeek 实时翻译**：非阻塞异步翻译，推送完成后自动追加中文译文，零延迟不卡主循环
+- **多频道智能路由**：按推特 Handle 分组路由到不同 Telegram 频道，同一博主可同时推送至多个频道
+- **双轨数据捕获**：WebSocket 实时监听 + HTTP Polling 降级拦截，重连间隙零丢失
+- **去重引擎**：基于 `internal_id` 的快照/完整版智能去重，500ms 窗口内自动选优
+- **三通道扇出分发**：Telegram、WebSocket、Webhook 并行推送，任一通道故障不影响其余
+- **12 小时自动刷新**：systemd `RuntimeMaxSec` 定时重启，防止长时间运行导致浏览器内存泄漏
+
+---
+
+## 💡 FAQ：首次授权与账号准备必读
 
 在开始部署之前，你需要了解 GMGN 的底层授权机制：
 
 - **GMGN 官网**: [https://gmgn.ai/r/1RFSf1fc?chain=bsc](https://gmgn.ai/r/1RFSf1fc?chain=bsc)
-- **获取授权链接**: 首次使用时，你需要在 Telegram 中找到 GMGN Bot 提供的专属登录/授权链接（右键复制链接），并将其填入到本项目的配置文件 `config.py` 中的 `AUTH_URL` 里（详见下文第5步）。
+- **获取授权链接**: 首次使用时，你需要在 Telegram 中找到 GMGN Bot 提供的专属登录/授权链接（右键复制链接），并将其填入到本项目的配置文件 `config.py` 中的 `AUTH_URL` 里（详见下文第 5 步）。
 - **⚠️ 账号风控注意**: 强烈建议使用一个 **空 TG / 小号** 来扫码授权隔离风险。但请注意 GMGN 官方规则：对于没有任何交易量的纯空号，GMGN 会限制其关注小众博主（需要有交易量才能解锁）。相关限制规则请自行了解。
 - **📹 推特演示说明**: [点此查看视频说明演示](https://x.com/0xTechMelon/status/2049114161498726883?s=20)
 
 ---
 
-## 1. 安装基础依赖和 Python 工具 `uv`
+## 📂 项目结构
+
+```
+GmgnTwitterClaw/
+├── gmgn_twitter_monitor/          # 核心包
+│   ├── __init__.py
+│   ├── __main__.py                # python -m 入口
+│   ├── app.py                     # 主循环：浏览器启动 + WS/Polling 双轨拦截 + 去重引擎
+│   ├── browser.py                 # Playwright 浏览器生命周期管理（启动/登录/截图/恢复）
+│   ├── config.py                  # 配置中心：从 .env 读取环境变量 + 路由分组解析
+│   ├── distributor.py             # 四大分发器：Logging / Telegram / WebSocket / Webhook
+│   ├── logging_setup.py           # loguru 日志格式化
+│   ├── models.py                  # StandardizedMessage 数据模型（dataclass）
+│   ├── parser.py                  # 原始 WS 数据 → 标准化 JSON 转换器
+│   ├── translator.py              # DeepSeek 异步翻译引擎
+│   └── watchdog.py                # 看门狗：超时无数据自动刷新页面
+├── gmgn_twitter_monitor.py        # 兼容入口（等价于 python -m gmgn_twitter_monitor）
+├── ctl.py                         # 交互式运维控制台（服务管理/日志查看/截图等）
+├── gmgn-twitter-monitor.service   # systemd 服务单元文件
+├── .env.example                   # 环境变量模板
+├── requirements.txt               # Python 依赖清单
+└── browser_data/                  # 浏览器登录态持久化目录（自动生成，勿删）
+```
+
+---
+
+## 🚀 部署指南
+
+### 1. 安装基础依赖和 Python 工具 `uv`
 
 `uv` 是比原生的 `pip` 快几百倍的现代化 Python 环境管理工具，本程序使用它来隔离虚拟环境。
 
@@ -33,7 +73,7 @@ uv venv
 uv pip install -r requirements.txt
 ```
 
-## 2. 安装 Playwright 内核与 Linux 缺失的底层桌面包
+### 2. 安装 Playwright 内核与 Linux 缺失的底层桌面包
 
 因为程序的核心本质是操纵真的浏览器进行抓取，所以我们需要安装浏览器内核及在 Linux 裸机运行虚拟桌面所必须的 C 语言底层库。
 
@@ -45,12 +85,12 @@ uv run playwright install chromium
 sudo uv run playwright install-deps chromium
 ```
 
-## 3. 设置 Cloudflare WARP 代理 (突破 IP 盾防御核心)
+### 3. 设置 Cloudflare WARP 代理（突破 IP 盾防御核心）
 
 如果不配置这一步，机房 VPS 的 IP 访问 gmgn.ai 会被 Cloudflare 100% 出现盾阻断（"Sorry, you have been blocked"），甚至连验证码都不会给。通过挂载官方 WARP 服务，并将其转化为本地 Proxy，脚本将可以获得家庭宽带级别的隐身穿透能力。
 
 ```bash
-# 1. 注入 Cloudflare 的 GPG 密钥并添加官方 APT 源 (仅限 Ubuntu/Debian 系示范)
+# 1. 注入 Cloudflare 的 GPG 密钥并添加官方 APT 源 (仅限 Ubuntu/Debian 系)
 curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
 
@@ -73,7 +113,7 @@ curl -x socks5://127.0.0.1:40000 https://cloudflare.com/cdn-cgi/trace
 # 如果输出的信息中有 warp=on 字眼，说明穿透成功。
 ```
 
-## 4. 配置环境变量
+### 4. 配置环境变量
 
 所有敏感信息通过 `.env` 文件管理，**严禁提交到 Git**（已在 `.gitignore` 中屏蔽）。
 
@@ -83,18 +123,36 @@ cp .env.example .env
 nano .env
 ```
 
-`.env` 配置项说明：
+完整的环境变量说明：
 
-| 变量名 | 说明 | 示例 |
-|--------|------|------|
-| `WS_TOKEN` | WebSocket 鉴权 Token，建议强随机串 | `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
-| `TG_BOT_TOKEN` | Telegram Bot API Token | `123456:ABC-DEF...` |
-| `TG_CHANNEL_ID` | 目标 TG 频道 ID | `-100xxxxxxxxxx` |
-| `TG_FILTER_HANDLES` | 只转发这些 handle（逗号分隔），留空转发全部 | `cz_binance,heyibinance` |
-| `WEBHOOK_URL` | Webhook 推送目标 URL（留空则禁用） | `https://your-site.com/api/webhook` |
-| `WEBHOOK_SECRET` | HMAC-SHA256 签名密钥（可选） | 任意字符串 |
+| 变量名 | 必填 | 说明 |
+|--------|:----:|------|
+| `WS_TOKEN` | ✅ | WebSocket 鉴权 Token，建议用 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 生成 |
+| `TG_BOT_TOKEN` | ✅ | Telegram Bot API Token |
+| `TG_ENABLE_DEFAULT` | ❌ | 默认频道推送开关（`True`/`False`），默认 `False` |
+| `TG_CHANNEL_ID` | ❌ | 默认/兜底频道 ID（未命中任何路由分组时使用） |
+| `TG_ENABLE_<GROUP>` | ❌ | 分组推送开关，如 `TG_ENABLE_BINANCE=True` |
+| `TG_CHANNEL_ID_<GROUP>` | ❌ | 分组目标频道 ID，如 `TG_CHANNEL_ID_BINANCE=-100xxx` |
+| `TG_ROUTING_<GROUP>` | ❌ | 分组内的推特 Handle 列表（逗号分隔），如 `TG_ROUTING_BINANCE=cz_binance,heyibinance` |
+| `TG_FILTER_HANDLES` | ❌ | 附加白名单（一般留空，路由分组的 Handle 会自动合并） |
+| `DEEPSEEK_API_KEY` | ❌ | DeepSeek API Key，留空则跳过翻译 |
+| `WEBHOOK_URL` | ❌ | Webhook 推送目标 URL，留空则禁用 |
+| `WEBHOOK_SECRET` | ❌ | HMAC-SHA256 签名密钥 |
 
-## 5. 首次运行与授权 (代码配置)
+#### 多频道路由分组规则
+
+每个路由分组需要定义**三个后缀一致**的变量（例如后缀为 `BINANCE`）：
+
+```env
+TG_ENABLE_BINANCE=True                              # 开关
+TG_CHANNEL_ID_BINANCE=-1001234567891                 # 目标频道
+TG_ROUTING_BINANCE=cz_binance,heyibinance            # 博主列表
+```
+
+- 同一个 Handle 可以出现在多个分组中，会同时推送到所有匹配的频道
+- `TG_FILTER_HANDLES` 无需手动填写路由分组里的 Handle，系统会自动合并
+
+### 5. 首次运行与授权
 
 当你的新服务器第一次打算跑脚本时，你需要让程序获得你具体的身份登录状态。
 
@@ -105,6 +163,7 @@ nano .env
 ```bash
 uv run python -m gmgn_twitter_monitor
 ```
+
 > 该程序会自动利用 `xvfbwrapper` 在后台开启隐形的虚拟桌面，使用有头模式（突破 CF 封锁）访问该授权页面，并等候 8 秒将登录凭证序列化写入当前目录下的 `./browser_data` 文件夹。此后它会自动关闭可能会弹出的弹窗，切换到【我的】标签进行监听。
 >
 > 兼容方式仍然保留：如果你已有旧脚本依赖，也可以继续执行 `uv run python gmgn_twitter_monitor.py`。
@@ -112,51 +171,30 @@ uv run python -m gmgn_twitter_monitor
 **【重要】**
 一旦第一次看到日志输出获取成功，为了加速以后重启的流程，建议你回去把 `gmgn_twitter_monitor/config.py` 里的 `FIRST_RUN_LOGIN` 重新改回 `False`。只要 `browser_data` 文件夹不被删，服务器就可以在接下来的很长一段时间内复用该状态免密直接连接。
 
-## 6. 三通道推送架构
+### 6. systemd 服务自动守护
 
-系统内置 4 个分发器，通过 `DistributorHub` 扇出架构并行推送，任何一个通道失败不影响其余：
+```bash
+# 将 service 文件链接到 systemd 目录
+sudo ln -sf $(pwd)/gmgn-twitter-monitor.service /etc/systemd/system/
+sudo systemctl daemon-reload
 
-```
-                  ┌──────────────────────────────────────────┐
-                  │         Parser 标准化 JSON                │
-                  └────────────────┬─────────────────────────┘
-                                   │
-                          DistributorHub.publish()
-                     ┌─────────────┼──────────────┐
-                     │             │              │
-              ┌──────▼──────┐ ┌───▼────────┐ ┌───▼──────────┐
-              │  Telegram   │ │  Webhook   │ │   WSS 广播    │
-              │  频道推送   │ │  HTTP POST │ │  实时连接     │
-              │ (按 handle  │ │ (HMAC签名) │ │ (Token 鉴权) │
-              │  白名单过滤)│ │            │ │              │
-              └──────┬──────┘ └─────┬──────┘ └──────┬───────┘
-                     │              │               │
-                TG Bot API     你的聚合站     wss://your-domain.com/ws
+# 开机自启 + 立即启动
+sudo systemctl enable gmgn-twitter-monitor.service
+sudo systemctl start gmgn-twitter-monitor.service
+
+# 查看运行状态
+sudo systemctl status gmgn-twitter-monitor.service
+
+# 查看实时日志
+sudo journalctl -u gmgn-twitter-monitor -f
 ```
 
-### 6.1 Telegram 频道推送
+**服务守护策略：**
+- 崩溃后 **10 秒**自动重启（`RestartSec=10`）
+- 每 **12 小时**自动重启一次（`RuntimeMaxSec=43200`），防止浏览器长时间运行导致内存泄漏或 WebSocket 老化
+- 启动日志会打印当前启动时间和下次预计重启时间
 
-- **自动过滤**: 仅转发 `TG_FILTER_HANDLES` 中指定账号的推文
-- **富文本格式**: HTML 格式，包含作者信息、推文内容、引用来源、媒体附件、原推链接
-- **429 退避**: 遇到 Telegram Rate Limit 时自动等待并重试
-- **配置**: 在 `.env` 中设置 `TG_BOT_TOKEN` 和 `TG_CHANNEL_ID`
-
-### 6.2 Webhook 推送
-
-- **标准 JSON POST**: 将完整的标准化消息体 POST 到目标 URL
-- **HMAC-SHA256 签名**: 可选，通过 `X-Signature-SHA256` 请求头传递，接收端可验证来源
-- **按需启用**: `WEBHOOK_URL` 为空时自动跳过，无额外开销
-- **配置**: 在 `.env` 中设置 `WEBHOOK_URL` 和 `WEBHOOK_SECRET`
-
-### 6.3 WSS 实时连接
-
-- **加密连接**: 通过 Nginx 反代 + Let's Encrypt 证书实现 TLS 加密
-- **连接地址**: `wss://your-domain.com/ws`
-- **鉴权方式**: 连接后 10 秒内发送 `{"token": "your-ws-token"}`
-- **心跳**: 服务端每 30 秒 ping，客户端自动 pong（websockets 库默认处理）
-- **配置**: 在 `.env` 中设置 `WS_TOKEN`
-
-## 7. Nginx + TLS 配置 (WSS)
+### 7. Nginx + TLS 配置（WSS）
 
 如果在新服务器上需要重新配置 WSS：
 
@@ -178,27 +216,114 @@ sudo nginx -t && sudo systemctl reload nginx
 
 证书由 Certbot 的 systemd timer 自动续期，无需手动干预。
 
-## 8. systemd 服务自动守护
+---
 
-```bash
-# 将 service 文件链接到 systemd 目录
-sudo ln -sf $(pwd)/gmgn-twitter-monitor.service /etc/systemd/system/
-sudo systemctl daemon-reload
+## 🏗️ 系统架构
 
-# 开机自启 + 立即启动
-sudo systemctl enable gmgn-twitter-monitor.service
-sudo systemctl start gmgn-twitter-monitor.service
+### 四通道分发架构
 
-# 查看运行状态
-sudo systemctl status gmgn-twitter-monitor.service
-
-# 查看实时日志
-sudo journalctl -u gmgn-twitter-monitor -f
+```
+   gmgn.ai WebSocket / HTTP Polling
+              │
+              ▼
+   ┌─────────────────────┐
+   │  Parser 标准化 JSON   │ ← 10 种 Twitter 动作全解析
+   └──────────┬──────────┘
+              │
+    MessageDeduplicator      ← 500ms 窗口智能去重
+              │
+    DistributorHub.publish()
+     ┌────────┼────────┬──────────┐
+     │        │        │          │
+┌────▼───┐ ┌──▼────┐ ┌─▼──────┐ ┌─▼───────┐
+│Logging │ │  TG   │ │Webhook │ │  WSS    │
+│ 日志   │ │ 频道  │ │HTTP POST│ │ 广播   │
+│        │ │ 多频道│ │HMAC签名│ │Token鉴权│
+│        │ │ 路由  │ │        │ │         │
+└────────┘ └──┬────┘ └────────┘ └─────────┘
+              │
+        DeepSeek 异步翻译
+       (推送后追加译文)
 ```
 
-崩溃后 10 秒自动重启（由 `RestartSec=10` 控制）。
+### Telegram 推送特性
 
-## 9. WSS 客户端接入示例
+- **FxTwitter 推文卡片**：发推、转推、回复、引用等动作自动通过 `fxtwitter.com` 渲染为带图/视频的嵌入式预览
+- **vxTwitter 主页名片**：关注、取关、改昵称、改简介等动作自动通过 `vxtwitter.com` 渲染为用户头像+简介的名片卡
+- **换头像对比图**：头像变更动作保留原生 `sendMediaGroup`，展示新旧头像的并列对比
+- **DeepSeek 实时翻译**：推文发送后异步调用 DeepSeek API 翻译，翻译完成后自动编辑原消息追加中文译文，主推送流程零阻塞
+- **429 退避重试**：遇到 Telegram Rate Limit 时自动等待并重试
+
+---
+
+## 📡 推送数据格式（标准化 JSON）
+
+每条消息对应一个 Twitter 动作，三大通道（Telegram/WebSocket/Webhook）使用完全一致的 JSON 结构：
+
+```json
+{
+  "action": "tweet",
+  "original_action": null,
+  "tweet_id": "1234567890123456789",
+  "internal_id": "abc123def456",
+  "timestamp": 1712300000,
+  "author": {
+    "handle": "cz_binance",
+    "name": "CZ 🔶 BNB",
+    "avatar": "https://pbs.twimg.com/profile_images/xxx/photo.jpg",
+    "followers": 12800000,
+    "tags": ["Smart_kol"]
+  },
+  "content": {
+    "text": "推文正文内容...",
+    "media": [
+      { "type": "photo", "url": "https://pbs.twimg.com/media/xxx.jpg" }
+    ]
+  },
+  "reference": {
+    "tweet_id": "9876543210",
+    "author_handle": "elonmusk",
+    "author_name": "Elon Musk",
+    "author_avatar": "https://pbs.twimg.com/...",
+    "author_followers": 239600000,
+    "text": "被引用/回复/转推的原文...",
+    "media": [],
+    "type": "quoted"
+  },
+  "unfollow_target": null,
+  "avatar_change": null,
+  "bio_change": null
+}
+```
+
+### `action` 字段枚举（共 10 种）
+
+| 值 | 含义 | 说明 |
+|----|------|------|
+| `tweet` | 发布新推文 | 原创推文，`content.text` 有正文 |
+| `repost` | 转推（RT） | `reference` 包含被转推的原推信息 |
+| `reply` | 回复 | `reference` 包含被回复的原推信息 |
+| `quote` | 引用推文 | `content.text` 有引用评论，`reference` 有原推 |
+| `follow` | 新增关注 | `unfollow_target` 包含被关注者信息 |
+| `unfollow` | 取消关注 | `unfollow_target` 包含被取关者信息 |
+| `delete_post` | 删除推文 | `original_action` 记录被删推文的原始类型 |
+| `photo` | 更换头像 | `avatar_change` 包含 `before`/`after` 头像 URL |
+| `description` | 简介更新 | `bio_change` 包含 `before`/`after` 简介文本 |
+| `name` | 更改昵称 | 作者信息中包含新昵称 |
+
+### 条件字段说明
+
+| 字段 | 出现条件 |
+|------|----------|
+| `reference` | `repost` / `reply` / `quote` / `delete_post` |
+| `unfollow_target` | `follow` / `unfollow` |
+| `avatar_change` | `photo` |
+| `bio_change` | `description` |
+| `original_action` | `delete_post` |
+
+---
+
+## 🔌 WSS 客户端接入示例
 
 ```python
 import asyncio
@@ -235,42 +360,6 @@ if __name__ == "__main__":
     asyncio.run(listen_forever())
 ```
 
-## 10. 推送数据格式（标准化 JSON）
-
-每条消息对应一个 Twitter 动作：
-
-```json
-{
-  "action": "tweet",
-  "tweet_id": "1234567890123456789",
-  "internal_id": "abc123",
-  "timestamp": 1712300000,
-  "author": {
-    "handle": "cz_binance",
-    "name": "CZ 🔶 BNB",
-    "avatar": "https://pbs.twimg.com/profile_images/xxx/photo.jpg",
-    "followers": 12800000
-  },
-  "content": {
-    "text": "推文正文内容...",
-    "media": [
-      { "type": "photo", "url": "https://pbs.twimg.com/media/xxx.jpg" }
-    ]
-  },
-  "reference": null
-}
-```
-
-### `action` 字段枚举
-
-| 值 | 含义 |
-|----|------|
-| `tweet` | 原创推文 |
-| `repost` | 转推（RT） |
-| `reply` | 回复 |
-| `quote` | 引用推文 |
-| `unknown` | 未知类型 |
-
 ### Webhook 签名验证示例
 
 ```python
@@ -286,16 +375,26 @@ def verify_signature(body: bytes, secret: str, received_signature: str) -> bool:
 # is_valid = verify_signature(request.body, "your-secret", signature)
 ```
 
-## 11. 配置速查
+---
+
+## 📋 配置速查
 
 | 配置项 | 值 |
 |--------|-----|
 | WSS 地址 | `wss://your-domain.com/ws` |
 | 鉴权 Token | `.env → WS_TOKEN` |
-| TG 推送 | `.env → TG_BOT_TOKEN + TG_CHANNEL_ID` |
+| TG 推送 | `.env → TG_BOT_TOKEN` + 路由分组变量 |
+| 翻译 | `.env → DEEPSEEK_API_KEY` |
 | Webhook | `.env → WEBHOOK_URL` |
 | 心跳间隔 | 30 秒 |
 | 看门狗超时 | 120 秒（无消息自动刷新页面） |
+| 服务自动重启 | 每 12 小时（`RuntimeMaxSec=43200`） |
 | 监控目标 | `gmgn.ai/follow?target=xTracker&chain=bsc` |
 | WARP 代理 | `socks5://127.0.0.1:40000` |
 | SSL 证书 | Let's Encrypt，Certbot 自动续期 |
+
+---
+
+## 📜 License
+
+MIT

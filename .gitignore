@@ -2,6 +2,7 @@
 __pycache__/
 *.log
 _run_*.py
+ctl_git_release.py
 browser_data/
 monitor_running.png
 .env

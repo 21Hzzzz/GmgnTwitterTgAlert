@@ -182,22 +182,21 @@ class TelegramDistributor(BaseDistributor):
         return f" · {count} 粉丝"
 
     def _format_message(self, msg: dict) -> str:
-        """将标准化 JSON 组装为 TG HTML 富文本消息。"""
+        """将标准化 JSON 组装为 TG HTML 头部。"""
         action = msg.get("action", "unknown")
         author = msg.get("author", {})
-        content = msg.get("content", {})
-        reference = msg.get("reference")
-        tweet_id = msg.get("tweet_id", "")
+        handle = author.get("handle", "unknown")
+        author_name = self._escape_html(author.get("name") or handle)
+        author_followers = self._format_followers(author.get("followers"))
         unfollow_target = msg.get("unfollow_target")
-        original_action = msg.get("original_action")
 
         action_map = {
             "tweet": "📝 发布新推文",
             "repost": "🔄 转推",
             "reply": "💬 回复",
             "quote": "📌 引用推文",
-            "follow": "➕ 新增关注",
-            "unfollow": "👋 取消关注",
+            "follow": "✅ 新增关注",
+            "unfollow": "❌ 取消关注",
             "delete_post": "🗑️ 删除推文",
             "photo": "🖼️ 更换头像",
             "description": "⇧ 简介更新",
@@ -205,165 +204,59 @@ class TelegramDistributor(BaseDistributor):
         }
         action_text = action_map.get(action, f"❓ {action}")
 
-        handle = author.get("handle", "unknown")
-        name = author.get("name", handle)
-        followers = author.get("followers")
+        lines = []
+        author_link = f'👤 <a href="https://x.com/{handle}">{author_name} @{handle}</a>{author_followers}'
 
-        lines: list[str] = []
-        lines.append(f"<b>{action_text}</b>")
-
-        # delete_post 标注被删推文的原始类型
-        if action == "delete_post" and original_action:
-            orig_label = action_map.get(original_action, original_action)
-            lines.append(f"  ↳ 原始类型: {orig_label}")
-
-        lines.append("")
-
-        # 作者信息
-        lines.append(
-            f'👤 <a href="https://x.com/{handle}">{self._escape_html(name)}</a>'
-            f" <code>@{handle}</code>{self._format_followers(followers)}"
-        )
-        lines.append("")
-
-        # ──── follow/unfollow 专用区块 ────
+        # ──── 关注/取关 ────
         if action in ("follow", "unfollow") and unfollow_target:
+            lines.append(f"<b>{action_text}</b>")
+            lines.append(author_link)
             t_handle = unfollow_target.get("handle", "?")
-            t_name = unfollow_target.get("name", t_handle)
-            t_bio = unfollow_target.get("bio", "")
-            t_followers = unfollow_target.get("followers")
-
-            action_icon = "✅ 关注了" if action == "follow" else "❌ 取关了"
-            lines.append(
-                f'{action_icon} <a href="https://x.com/{t_handle}">'
-                f"{self._escape_html(t_name)}</a>"
-                f" <code>@{t_handle}</code>{self._format_followers(t_followers)}"
-            )
-            if t_bio:
-                lines.append(f"  ┃ {self._escape_html(t_bio[:200])}")
-            lines.append("")
+            t_name = self._escape_html(unfollow_target.get("name") or t_handle)
+            t_followers = self._format_followers(unfollow_target.get("followers"))
+            t_link = f'<a href="https://x.com/{t_handle}">{t_name} @{t_handle}</a>{t_followers}'
+            prefix = "✅ 关注了" if action == "follow" else "❌ 取关了"
+            lines.append(f"{prefix} {t_link}")
             return "\n".join(lines)
 
-        # ──── photo 头像变更区块 ────
-        avatar_change = msg.get("avatar_change")
-        if action == "photo" and avatar_change:
-            before_url = avatar_change.get("before", "")
-            after_url = avatar_change.get("after", "")
-            lines.append("旧头像 → 新头像")
-            lines.append("")
-            if before_url:
-                lines.append(f'🅰️ <a href="{before_url}">旧头像</a>')
-            if after_url:
-                lines.append(f'🅱️ <a href="{after_url}">新头像</a>')
-            return "\n".join(lines)
+        # ──── 其他动作 ────
+        lines.append(f"<b>{action_text}</b>")
+        lines.append(author_link)
+        
+        if action in ("repost", "reply", "quote"):
+            reference = msg.get("reference") or {}
+            ref_handle = reference.get("author_handle")
+            ref_name = self._escape_html(reference.get("author_name") or ref_handle or "?")
+            ref_followers = self._format_followers(reference.get("author_followers"))
+            if ref_handle:
+                ref_link = f'<a href="https://x.com/{ref_handle}">{ref_name} @{ref_handle}</a>{ref_followers}'
+                prefix_map = {"repost": "🔄 转推了", "reply": "💬 回复了", "quote": "📌 引用了"}
+                prefix = prefix_map.get(action, "➡️ 指向")
+                lines.append(f"{prefix} {ref_link}")
 
-        # ──── description 简介更新区块 ────
-        bio_change = msg.get("bio_change")
-        if action == "description" and bio_change:
-            before_bio = bio_change.get("before", "")
-            after_bio = bio_change.get("after", "")
-            
-            import difflib
-            diff_lines = list(difflib.ndiff(before_bio.splitlines(), after_bio.splitlines()))
-            old_bio_lines = []
-            for dline in diff_lines:
-                if dline.startswith("- "):
-                    old_bio_lines.append(f"<s>{self._escape_html(dline[2:])}</s>")
-                elif dline.startswith("  "):
-                    old_bio_lines.append(self._escape_html(dline[2:]))
-            
-            lines.append("旧简介：")
-            if old_bio_lines:
-                lines.append("\n".join(old_bio_lines))
-            else:
-                lines.append("无")
-            lines.append("")
-            
-            lines.append("新简介：")
-            lines.append(self._escape_html(after_bio))
-            lines.append("")
-            
-            lines.append(f'🖼 <a href="https://x.com/{handle}">原文</a>')
-            lines.append("")
-            
-            tz_cst = timezone(timedelta(hours=8))
-            ts = msg.get("timestamp", 0)
-            if ts:
-                tweet_time = datetime.fromtimestamp(ts, tz=tz_cst).strftime("%Y-%m-%d %H:%M:%S")
-            else:
-                tweet_time = "未知"
-            push_time = datetime.now(tz=tz_cst).strftime("%Y-%m-%d %H:%M:%S")
-            lines.append(f"🕐 推文时间: {tweet_time}")
-            lines.append(f"📡 推送时间: {push_time}")
-            
-            return "\n".join(lines)
+        # ──── delete_post ────
+        if action == "delete_post" and msg.get("original_action"):
+            orig_label = action_map.get(msg.get("original_action"), msg.get("original_action"))
+            lines.append(f"  ↳ 原类型: {orig_label}")
 
-        # ──── 正文 ────
-        text = content.get("text", "")
-        if text:
-            lines.append(f"<blockquote>{self._escape_html(text)}</blockquote>")
-            lines.append("")
-
-        # ──── 引用/转推来源 ────
-        if reference:
-            ref_handle = reference.get("author_handle", "")
-            ref_text = reference.get("text", "")
-            ref_tweet_id = reference.get("tweet_id", "")
-            ref_type_map = {
-                "retweeted": "🔄 转推自",
-                "replied_to": "💬 回复",
-                "quoted": "📌 引用自",
-                "deleted": "🗑️ 原引用",
-                "referenced": "↩️ 关联",
-            }
-            ref_label = ref_type_map.get(reference.get("type", ""), "↩️ 关联")
-
-            ref_link = f'<a href="https://x.com/{ref_handle}">@{ref_handle}</a>'
-            if ref_tweet_id and ref_handle:
-                ref_link = (
-                    f'<a href="https://x.com/{ref_handle}/status/{ref_tweet_id}">'
-                    f"@{ref_handle}</a>"
-                )
-            lines.append(f"┃ {ref_label} {ref_link}")
-            if ref_text:
-                lines.append(f"┃ {self._escape_html(ref_text[:280])}")
-
-            # 引用推文的媒体（仅显示非图片，图片由 sendPhoto 嵌入）
-            ref_media = reference.get("media", [])
-            for m in ref_media:
-                m_url = m.get("url", "")
-                m_type = m.get("type", "media")
-                if m_url and m_type not in ("thumbnail", "image"):
-                    lines.append(f'┃ 📎 <a href="{m_url}">[{m_type}]</a>')
-            lines.append("")
-
-        # ──── 媒体附件（仅显示非图片，图片由 sendPhoto 嵌入） ────
-        media_list = content.get("media", [])
-        if media_list:
-            for m in media_list:
-                m_type = m.get("type", "media")
-                m_url = m.get("url", "")
-                if m_url and m_type not in ("thumbnail", "image"):
-                    lines.append(f'📎 <a href="{m_url}">[{m_type}]</a>')
-            if any(m.get("type") not in ("thumbnail", "image") and m.get("url") for m in media_list):
+        # ──── photo ────
+        if action == "photo":
+            avatar_change = msg.get("avatar_change")
+            if avatar_change:
+                b = avatar_change.get("before", "")
+                a = avatar_change.get("after", "")
                 lines.append("")
+                if b: lines.append(f'🅰️ <a href="{b}">旧头像</a>')
+                if a: lines.append(f'🅱️ <a href="{a}">新头像</a>')
 
-        # ──── 原推链接 ────
-        if tweet_id and handle:
-            tweet_url = f"https://x.com/{handle}/status/{tweet_id}"
-            lines.append(f'🔗 <a href="{tweet_url}">查看原推</a>')
-
-        # ──── 时间信息 ────
-        tz_cst = timezone(timedelta(hours=8))
-        ts = msg.get("timestamp", 0)
-        if ts:
-            tweet_time = datetime.fromtimestamp(ts, tz=tz_cst).strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            tweet_time = "未知"
-        push_time = datetime.now(tz=tz_cst).strftime("%Y-%m-%d %H:%M:%S")
-        lines.append("")
-        lines.append(f"🕐 推文时间: {tweet_time}")
-        lines.append(f"📡 推送时间: {push_time}")
+        # ──── description ────
+        if action == "description":
+            bio_change = msg.get("bio_change")
+            if bio_change:
+                lines.append("\n<b>旧简介:</b>")
+                lines.append(self._escape_html(bio_change.get("before", "")))
+                lines.append("\n<b>新简介:</b>")
+                lines.append(self._escape_html(bio_change.get("after", "")))
 
         return "\n".join(lines)
 
@@ -401,10 +294,8 @@ class TelegramDistributor(BaseDistributor):
             logger.error(f"📱 TG 推送未知异常: {e}")
             return None
 
-    async def _translate_and_edit(self, message_id: int, original_text: str,
-                                  is_caption: bool, message: dict, target_channel_id: str) -> None:
-        """异步翻译推文并编辑已发送的 TG 消息，追加中文翻译。"""
-        # 收集所有需要翻译的文本内容
+    async def _translate_and_edit(self, message_id: int, header: str, footer: str, message: dict, target_channel_id: str) -> None:
+        """异步翻译推文并编辑已发送的 TG 消息，将中文翻译追加到中间。"""
         content = message.get("content", {}) or {}
         reference = message.get("reference") or {}
         bio_change = message.get("bio_change") or {}
@@ -416,6 +307,7 @@ class TelegramDistributor(BaseDistributor):
         if bio_change.get("after"):
             text_parts.append(bio_change["after"])
 
+        # 如果没有文本，就直接返回，不再发带有翻译的消息
         if not text_parts:
             return
 
@@ -424,47 +316,28 @@ class TelegramDistributor(BaseDistributor):
         if not translated:
             return
 
-        # 拼接翻译结果到原文本末尾
-        separator = "\n\n—— 🌐 中文翻译 ——\n"
-        new_text = original_text + separator + self._escape_html(translated)
+        # 极简卡片流结构： 头部 \n\n 翻译 \n\n 尾部
+        separator = "—— 🌐 中文翻译 ——\n"
+        new_text = f"{header}\n\n{separator}{self._escape_html(translated)}\n\n{footer}"
 
         handle = message.get("author", {}).get("handle", "?")
 
-        if is_caption:
-            payload = {
-                "chat_id": target_channel_id,
-                "message_id": message_id,
-                "caption": new_text[:1024],
-                "parse_mode": "HTML",
-            }
-            result = await self._send_api("editMessageCaption", payload)
-        else:
-            payload = {
-                "chat_id": target_channel_id,
-                "message_id": message_id,
-                "text": new_text[:4096],
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False,
-            }
-            result = await self._send_api("editMessageText", payload)
+        payload = {
+            "chat_id": target_channel_id,
+            "message_id": message_id,
+            "text": new_text[:4096],
+            "parse_mode": "HTML",
+            "disable_web_page_preview": False,
+        }
+        result = await self._send_api("editMessageText", payload)
 
         if result and result.get("ok"):
             logger.info(f"🌐 TG 翻译追加成功: @{handle}")
         else:
             logger.warning(f"🌐 TG 翻译追加失败: @{handle}")
 
-    @staticmethod
-    def _collect_image_urls(message: dict) -> list[str]:
-        """从消息中收集所有 image 类型的 URL（content.media + reference.media）。"""
-        urls: list[str] = []
-        for source in (message.get("content", {}), message.get("reference") or {}):
-            for m in source.get("media", []):
-                if isinstance(m, dict) and m.get("type") == "image" and m.get("url"):
-                    urls.append(m["url"])
-        return urls
-
     async def _distribute_to_channel(self, message: dict, handle: str, action: str, target_channel_id: str, time_log_str: str) -> None:
-        # ──── photo 动作：发送前后头像对比 ────
+        # ──── photo 动作：由于 FxTwitter 无法展示换头像前后的两张图，需要保留 sendMediaGroup ────
         if action == "photo":
             avatar_change = message.get("avatar_change") or {}
             before_url = avatar_change.get("before", "")
@@ -472,6 +345,7 @@ class TelegramDistributor(BaseDistributor):
 
             if before_url and after_url:
                 caption = self._format_message(message)[:1024]
+                import json
                 media = json.dumps([
                     {"type": "photo", "media": before_url, "caption": caption, "parse_mode": "HTML"},
                     {"type": "photo", "media": after_url},
@@ -482,55 +356,56 @@ class TelegramDistributor(BaseDistributor):
                     logger.info(f"📱 TG 头像变更推送成功: @{handle} {time_log_str}")
                 return
 
-        # ──── 收集推文中的图片 ────
-        image_urls = self._collect_image_urls(message)
+        # ──── 计算时间尾部 ────
+        tz_cst = timezone(timedelta(hours=8))
+        ts = message.get("timestamp", 0)
+        tweet_time = datetime.fromtimestamp(ts, tz=tz_cst).strftime("%Y-%m-%d %H:%M:%S") if ts else "未知"
+        footer = f"🕒 推文时间: {tweet_time}"
 
-        if image_urls:
-            # 方案 2：稳定支持多图，发送原生图片媒体
-            caption = self._format_message(message)[:1024] # 图片 caption 限制 1024
-            
-            if len(image_urls) == 1:
-                payload = {
-                    "chat_id": target_channel_id,
-                    "photo": image_urls[0],
-                    "caption": caption,
-                    "parse_mode": "HTML"
-                }
-                result = await self._send_api("sendPhoto", payload)
-            else:
-                media_list = []
-                # TG sendMediaGroup 限制最多 10 个媒体
-                for i, url in enumerate(image_urls[:10]):
-                    media_item = {"type": "photo", "media": url}
-                    if i == 0:
-                        media_item["caption"] = caption
-                        media_item["parse_mode"] = "HTML"
-                    media_list.append(media_item)
-                
-                payload = {
-                    "chat_id": target_channel_id,
-                    "media": json.dumps(media_list)
-                }
-                result = await self._send_api("sendMediaGroup", payload)
-            is_caption = True
+        # ──── 头部与正文 ────
+        header = self._format_message(message)
+        initial_text = f"{header}\n\n{footer}"
+        
+        # ──── 动态计算预览链接 (使用 FxTwitter 获得更好预览) ────
+        preview_url = None
+        if action in ("follow", "unfollow"):
+            t_handle = message.get("unfollow_target", {}).get("handle")
+            if t_handle:
+                preview_url = f"https://vxtwitter.com/{t_handle}"
+        elif action == "repost":
+            reference = message.get("reference") or {}
+            ref_handle = reference.get("author_handle")
+            ref_tweet_id = reference.get("tweet_id")
+            if ref_handle and ref_tweet_id:
+                preview_url = f"https://fxtwitter.com/{ref_handle}/status/{ref_tweet_id}"
+            elif message.get("tweet_id") and handle:
+                preview_url = f"https://fxtwitter.com/{handle}/status/{message.get('tweet_id')}"
+        elif action in ("tweet", "reply", "quote"):
+            tweet_id = message.get("tweet_id", "")
+            if tweet_id and handle:
+                preview_url = f"https://fxtwitter.com/{handle}/status/{tweet_id}"
+        elif action == "delete_post":
+            pass
         else:
-            caption = self._format_message(message)[:4096]
-            # 无图片时，仍然尝试将链接加入预览（如果有其他媒体等情况）
-            payload = {
-                "chat_id": target_channel_id,
-                "text": caption,
-                "parse_mode": "HTML",
-                "link_preview_options": {"is_disabled": False, "prefer_large_media": True}
-            }
-            result = await self._send_api("sendMessage", payload)
-            is_caption = False
+            if handle:
+                preview_url = f"https://vxtwitter.com/{handle}"
+
+        link_preview_options = {"is_disabled": False, "prefer_large_media": True}
+        if preview_url:
+            link_preview_options["url"] = preview_url
+
+        payload = {
+            "chat_id": target_channel_id,
+            "text": initial_text[:4096],
+            "parse_mode": "HTML",
+            "link_preview_options": link_preview_options
+        }
+        
+        result = await self._send_api("sendMessage", payload)
         
         if result and result.get("ok"):
-            img_info = f" (带{len(image_urls)}图)" if image_urls else ""
-            logger.info(f"📱 TG 推送成功{img_info}: @{handle} {time_log_str}")
+            logger.info(f"📱 TG 极简推送成功: @{handle} {time_log_str}")
 
-        # ──── 异步翻译 + 编辑追加 ────
-        if result and result.get("ok"):
             resp_result = result.get("result")
             msg_id = None
             if isinstance(resp_result, dict):
@@ -540,7 +415,7 @@ class TelegramDistributor(BaseDistributor):
 
             if msg_id:
                 asyncio.create_task(
-                    self._translate_and_edit(msg_id, caption, is_caption, message, target_channel_id)
+                    self._translate_and_edit(msg_id, header, footer, message, target_channel_id)
                 )
 
     async def distribute(self, message: dict) -> None:
