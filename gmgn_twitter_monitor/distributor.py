@@ -201,6 +201,8 @@ class TelegramDistributor(BaseDistributor):
             "photo": "🖼️ 更换头像",
             "description": "⇧ 简介更新",
             "name": "📛 更改昵称",
+            "pin": "📌 置顶推文",
+            "unpin": "📍 取消置顶",
         }
         action_text = action_map.get(action, f"❓ {action}")
 
@@ -401,7 +403,7 @@ class TelegramDistributor(BaseDistributor):
                 tweet_id = message.get("tweet_id", "")
                 if tweet_id and handle:
                     preview_url = f"https://fxtwitter.com/{handle}/status/{tweet_id}"
-        elif action == "tweet":
+        elif action in ("tweet", "pin", "unpin"):
             tweet_id = message.get("tweet_id", "")
             if tweet_id and handle:
                 preview_url = f"https://fxtwitter.com/{handle}/status/{tweet_id}"

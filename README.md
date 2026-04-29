@@ -4,7 +4,7 @@
 
 ### ✨ 核心特性
 
-- **全动作捕获**：覆盖发推、转推、回复、引用、关注/取关、删帖、换头像、改昵称、改简介共 10 种推特行为
+- **全动作捕获**：覆盖发推、转推、回复、引用、关注/取关、删帖、换头像、改昵称、改简介、置顶/取消置顶共 12 种推特行为
 - **FxTwitter / vxTwitter 富文本卡片**：推文自动渲染为带图/视频的嵌入式预览卡片，关注/取关等主页类动作自动渲染为用户名片
 - **DeepSeek 实时翻译**：非阻塞异步翻译，推送完成后自动追加中文译文，零延迟不卡主循环
 - **多频道智能路由**：按推特 Handle 分组路由到不同 Telegram 频道，同一博主可同时推送至多个频道
@@ -227,7 +227,7 @@ sudo nginx -t && sudo systemctl reload nginx
               │
               ▼
    ┌─────────────────────┐
-   │  Parser 标准化 JSON   │ ← 10 种 Twitter 动作全解析
+   │  Parser 标准化 JSON   │ ← 12 种 Twitter 动作全解析
    └──────────┬──────────┘
               │
     MessageDeduplicator      ← 500ms 窗口智能去重
@@ -296,7 +296,7 @@ sudo nginx -t && sudo systemctl reload nginx
 }
 ```
 
-### `action` 字段枚举（共 10 种）
+### `action` 字段枚举（共 12 种）
 
 | 值 | 含义 | 说明 |
 |----|------|------|
@@ -310,6 +310,8 @@ sudo nginx -t && sudo systemctl reload nginx
 | `photo` | 更换头像 | `avatar_change` 包含 `before`/`after` 头像 URL |
 | `description` | 简介更新 | `bio_change` 包含 `before`/`after` 简介文本 |
 | `name` | 更改昵称 | 作者信息中包含新昵称 |
+| `pin` | 置顶推文 | `tweet_id` 包含被置顶的推文 ID |
+| `unpin` | 取消置顶 | `tweet_id` 包含被取消置顶的推文 ID |
 
 ### 条件字段说明
 
