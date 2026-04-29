@@ -1,42 +1,42 @@
 """DeepSeek 翻译模块 — 用于将推文内容翻译为中文。
 
-采用极简 prompt + deepseek-chat 非流式输出，追求最低延迟。
+采用结构化 JSON 提交，分别独立翻译多个文本字段，避免文本拼接导致特殊标点或结构丢失。
 """
 
 import asyncio
+import json
 import aiohttp
 from loguru import logger
 
 from . import config
 
-# 系统 prompt：极简指令，减少 token 消耗和推理时间
 SYSTEM_PROMPT = (
-    "你是推文翻译器。将用户给的英文推文翻译为简体中文。"
-    "只输出翻译结果，不要解释，不要添加任何额外文字。"
-    "保留原文中的 @用户名、$代币符号、URL 链接和 emoji 不翻译。"
-    '如果原文已经是中文，直接输出"无需翻译"。'
+    "你是推文翻译器。用户会输入一段 JSON，包含多个字段（如 content, reference 等）。\n"
+    "请将其中所有的英文或其它外语推文翻译为简体中文，并以严格的 JSON 格式返回，保持原有键名不变。\n"
+    "规则：\n"
+    "1. 只输出翻译结果，不要解释，绝对不要添加任何 markdown 代码块（如 ```json）。\n"
+    "2. 保留原文中的 @用户名、$代币符号、URL 链接和 emoji 不翻译。\n"
+    "3. 如果某段文本已经是中文，或者只是短标点符号（如 `!`、`?` 等），则原样保留它的内容。\n"
+    "4. 返回结果必须是合法的 JSON 对象。"
 )
 
+async def translate_texts(texts_dict: dict[str, str]) -> dict[str, str] | None:
+    """调用 DeepSeek API 批量翻译多个文本字段。
 
-async def translate_text(text: str) -> str | None:
-    """调用 DeepSeek API 翻译文本。
-
-    返回翻译结果字符串，失败或无需翻译时返回 None。
+    输入 dict，例如 {"content": "...", "reference": "..."}
+    返回翻译后的 dict，原样保留键名。失败时返回 None。
     """
-    if not config.DEEPSEEK_API_KEY:
+    if not config.DEEPSEEK_API_KEY or not texts_dict:
         return None
 
-    if not text or len(text.strip()) < 5:
+    valid_texts = {k: v for k, v in texts_dict.items() if v and len(v.strip()) > 0}
+    if not valid_texts:
         return None
 
-    # 快速判断：纯中文内容跳过翻译
-    cjk_count = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
-    if cjk_count / max(len(text), 1) > 0.5:
-        return None
-
-    # 针对超长推文进行截断（加速翻译，同时防止加上翻译后突破 Telegram 4096 字符上限）
-    if len(text) > 1500:
-        text = text[:1500] + "...\n[原文过长已截断]"
+    # 针对超长推文进行截断
+    for k, v in valid_texts.items():
+        if len(v) > 1500:
+            valid_texts[k] = v[:1500] + "...\n[原文过长已截断]"
 
     headers = {
         "Content-Type": "application/json",
@@ -46,20 +46,19 @@ async def translate_text(text: str) -> str | None:
         "model": config.DEEPSEEK_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": text},
+            {"role": "user", "content": json.dumps(valid_texts, ensure_ascii=False)},
         ],
         "stream": False,
         "temperature": 0.3,
         "max_tokens": 1024,
+        "response_format": {"type": "json_object"}
     }
 
-    # 重试机制：最多尝试 2 次
     MAX_RETRIES = 2
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            timeout = aiohttp.ClientTimeout(total=45)  # 代理可能额外增加耗时
+            timeout = aiohttp.ClientTimeout(total=45)
             
-            # 使用 WARP 代理连接，开启 rdns=True 防止本地 DNS 解析失败/投毒导致的 Connection closed
             proxy_url = getattr(config, "PROXY_SERVER", "socks5://127.0.0.1:40000")
             from aiohttp_socks import ProxyConnector
             connector = ProxyConnector.from_url(proxy_url, rdns=True) if proxy_url else None
@@ -81,10 +80,20 @@ async def translate_text(text: str) -> str | None:
                     data = await resp.json()
                     result = data["choices"][0]["message"]["content"].strip()
 
-                    if "无需翻译" in result:
+                    # 容错：去除 markdown json 代码块
+                    if result.startswith("```json"):
+                        result = result[7:]
+                    if result.startswith("```"):
+                        result = result[3:]
+                    if result.endswith("```"):
+                        result = result[:-3]
+                        
+                    result = result.strip()
+                    try:
+                        return json.loads(result)
+                    except json.JSONDecodeError:
+                        logger.error(f"🌐 翻译结果无法解析为 JSON: {result}")
                         return None
-
-                    return result
 
         except asyncio.TimeoutError:
             logger.warning(f"🌐 DeepSeek 翻译超时 (第 {attempt} 次尝试)")

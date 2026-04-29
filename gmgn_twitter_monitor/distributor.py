@@ -318,37 +318,45 @@ class TelegramDistributor(BaseDistributor):
         content = message.get("content", {}) or {}
         reference = message.get("reference") or {}
         bio_change = message.get("bio_change") or {}
-        text_parts = []
+        text_parts = {}
         if content.get("text"):
-            text_parts.append(content["text"])
+            text_parts["content"] = content["text"]
         if reference.get("text"):
-            text_parts.append(reference["text"])
+            text_parts["reference"] = reference["text"]
         if bio_change.get("after"):
-            text_parts.append(bio_change["after"])
+            text_parts["bio"] = bio_change["after"]
 
-        # 如果没有文本，就直接返回，不再发带有翻译的消息
         if not text_parts:
             return
 
-        combined = "\n---\n".join(text_parts)
-        translated = await translate_text(combined)
-        if not translated:
+        from .translator import translate_texts
+        translated_dict = await translate_texts(text_parts)
+        if not translated_dict:
             return
 
-        # 如果翻译成功，我们将用 translated 替换掉最初带有英文的正文
-        # 极简卡片流结构： 无文本的头部 \n\n 翻译 \n\n 尾部
+        # 获取翻译后的文本（如果返回 dict 中缺失，则 fallback 到原文，防止因为单字段出错导致全部消失）
+        main_text = translated_dict.get("content") or text_parts.get("content", "")
+        ref_text = translated_dict.get("reference") or text_parts.get("reference", "")
+        bio_text = translated_dict.get("bio") or text_parts.get("bio", "")
+
+        # 判断内容是否真的有改变（比如全都是标点符号或者原样返回了中文）
+        # 如果经过翻译器后还是完全一样，就没必要更新 TG 消息
+        if (main_text == text_parts.get("content", "") and 
+            ref_text == text_parts.get("reference", "") and 
+            bio_text == text_parts.get("bio", "")):
+            logger.info("🌐 翻译结果与原文相同，跳过编辑。")
+            return
+
+        translated_html_parts = []
+        if main_text or bio_text:
+            text_to_show = main_text if main_text else bio_text
+            translated_html_parts.append(self._escape_html(text_to_show))
+        if ref_text:
+            translated_html_parts.append(f"<blockquote>💬 原推翻译：\n{self._escape_html(ref_text)}</blockquote>")
+
+        translated_html = "\n\n".join(translated_html_parts)
+        
         separator = "—— 🌐 中文翻译 ——\n"
-
-        # 翻译结果可能包含 --- 分隔符（content.text 与 reference.text 的翻译）
-        # 将 reference 部分的翻译也用 blockquote 包裹，与初始消息风格统一
-        if "\n---\n" in translated:
-            parts = translated.split("\n---\n", 1)
-            main_part = self._escape_html(parts[0].strip())
-            ref_part = self._escape_html(parts[1].strip())
-            translated_html = f"{main_part}\n\n<blockquote>💬 原推翻译：\n{ref_part}</blockquote>"
-        else:
-            translated_html = self._escape_html(translated)
-
         new_text = f"{header_no_text}\n\n{separator}{translated_html}\n\n{footer}"
 
         handle = message.get("author", {}).get("handle", "?")
