@@ -340,14 +340,29 @@ class TelegramDistributor(BaseDistributor):
             logger.info(f"🌐 翻译结果与原文相同，跳过编辑: {target_channel_id}")
             return
 
+        def format_part(translated: str, original: str) -> str:
+            if len(translated) > 1500: 
+                translated = translated[:1500] + "...\n[原文过长已截断]"
+            escaped = self._escape_html(translated)
+            
+            # 如果原文较短（<=120字符）且有实际翻译，附加斜体原文做对比
+            if original and len(original) <= 120 and original.strip() != translated.strip():
+                # 排查纯表情或纯标点：要求必须包含至少一个字母或数字
+                if any(c.isalpha() or c.isdigit() for c in original):
+                    # 为了美观，去掉末尾的回车并包裹在括号斜体中
+                    orig_clean = original.strip().replace('\n', ' ')
+                    escaped += f"\n(<i>{self._escape_html(orig_clean)}</i>)"
+            return escaped
+
         translated_html_parts = []
         if main_text or bio_text:
-            text_to_show = main_text if main_text else bio_text
-            if len(text_to_show) > 1500: text_to_show = text_to_show[:1500] + "...\n[原文过长已截断]"
-            translated_html_parts.append(self._escape_html(text_to_show))
+            t_text = main_text if main_text else bio_text
+            o_text = text_parts.get("content", "") if main_text else text_parts.get("bio", "")
+            translated_html_parts.append(format_part(t_text, o_text))
         if ref_text:
-            if len(ref_text) > 1500: ref_text = ref_text[:1500] + "...\n[原文过长已截断]"
-            translated_html_parts.append(f"<blockquote>💬 原推翻译：\n{self._escape_html(ref_text)}</blockquote>")
+            o_ref = text_parts.get("reference", "")
+            escaped_ref = format_part(ref_text, o_ref)
+            translated_html_parts.append(f"<blockquote>💬 原推翻译：\n{escaped_ref}</blockquote>")
 
         translated_html = "\n\n".join(translated_html_parts)
         
