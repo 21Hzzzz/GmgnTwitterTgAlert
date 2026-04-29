@@ -11,7 +11,7 @@ import websockets
 from loguru import logger
 from websockets.server import WebSocketServerProtocol
 
-from .translator import translate_text
+
 
 class BaseDistributor:
     """分发器基类，所有通道必须继承并实现 distribute 方法。"""
