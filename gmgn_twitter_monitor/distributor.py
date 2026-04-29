@@ -225,7 +225,7 @@ class TelegramDistributor(BaseDistributor):
         lines.append(f"<b>{action_text}</b>")
         lines.append(author_link)
         
-        if action in ("repost", "reply", "quote"):
+        if action in ("repost", "reply", "quote", "delete_post"):
             reference = msg.get("reference") or {}
             ref_handle = reference.get("author_handle")
             ref_name = self._escape_html(reference.get("author_name") or ref_handle or "?")
@@ -233,7 +233,10 @@ class TelegramDistributor(BaseDistributor):
             if ref_handle:
                 ref_link = f'<a href="https://x.com/{ref_handle}">{ref_name} @{ref_handle}</a>{ref_followers}'
                 prefix_map = {"repost": "🔄 转推了", "reply": "💬 回复了", "quote": "📌 引用了"}
-                prefix = prefix_map.get(action, "➡️ 指向")
+                if action == "delete_post":
+                    prefix = prefix_map.get(msg.get("original_action", ""), "↳ 原属于")
+                else:
+                    prefix = prefix_map.get(action, "➡️ 指向")
                 lines.append(f"{prefix} {ref_link}")
 
         # ──── delete_post ────
@@ -266,6 +269,13 @@ class TelegramDistributor(BaseDistributor):
                 if text:
                     lines.append("")
                     lines.append(self._escape_html(text))
+
+                # 展示 reference.text（被回复/引用/转推/删帖的原文），用 blockquote 区分
+                reference = msg.get("reference") or {}
+                ref_text = reference.get("text")
+                if ref_text:
+                    lines.append("")
+                    lines.append(f"<blockquote>{self._escape_html(ref_text)}</blockquote>")
 
         return "\n".join(lines)
 
@@ -328,7 +338,18 @@ class TelegramDistributor(BaseDistributor):
         # 如果翻译成功，我们将用 translated 替换掉最初带有英文的正文
         # 极简卡片流结构： 无文本的头部 \n\n 翻译 \n\n 尾部
         separator = "—— 🌐 中文翻译 ——\n"
-        new_text = f"{header_no_text}\n\n{separator}{self._escape_html(translated)}\n\n{footer}"
+
+        # 翻译结果可能包含 --- 分隔符（content.text 与 reference.text 的翻译）
+        # 将 reference 部分的翻译也用 blockquote 包裹，与初始消息风格统一
+        if "\n---\n" in translated:
+            parts = translated.split("\n---\n", 1)
+            main_part = self._escape_html(parts[0].strip())
+            ref_part = self._escape_html(parts[1].strip())
+            translated_html = f"{main_part}\n\n<blockquote>{ref_part}</blockquote>"
+        else:
+            translated_html = self._escape_html(translated)
+
+        new_text = f"{header_no_text}\n\n{separator}{translated_html}\n\n{footer}"
 
         handle = message.get("author", {}).get("handle", "?")
 
