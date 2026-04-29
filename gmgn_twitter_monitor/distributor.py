@@ -345,8 +345,8 @@ class TelegramDistributor(BaseDistributor):
                 translated = translated[:1500] + "...\n[原文过长已截断]"
             escaped = self._escape_html(translated)
             
-            # 如果原文较短（<=120字符）且有实际翻译，附加斜体原文做对比
-            if original and len(original) <= 120 and original.strip() != translated.strip():
+            # 如果原文较短（<=80字符）且有实际翻译，附加斜体原文做对比
+            if original and len(original) <= 80 and original.strip() != translated.strip():
                 # 排查纯表情或纯标点：要求必须包含至少一个字母或数字
                 if any(c.isalpha() or c.isdigit() for c in original):
                     # 为了美观，去掉末尾的回车并包裹在括号斜体中
