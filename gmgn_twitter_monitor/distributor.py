@@ -369,7 +369,8 @@ class TelegramDistributor(BaseDistributor):
         else:
             logger.warning(f"🌐 TG 翻译追加失败: @{handle} -> {target_channel_id}")
 
-    async def _distribute_to_channel(self, message: dict, handle: str, action: str, target_channel_id: str, time_log_str: str, translated_dict: dict[str, str] | None = None) -> None:
+    async def _distribute_to_channel(self, message: dict, handle: str, action: str, target_channel_id: str, time_log_str: str) -> dict | None:
+        """推送原文到单个频道，返回推送上下文（含 msg_id）供后续翻译编辑使用。"""
         # ──── photo 动作：由于 FxTwitter 无法展示换头像前后的两张图，需要保留 sendMediaGroup ────
         if action == "photo":
             avatar_change = message.get("avatar_change") or {}
@@ -387,7 +388,7 @@ class TelegramDistributor(BaseDistributor):
                 result = await self._send_api("sendMediaGroup", payload)
                 if result and result.get("ok"):
                     logger.info(f"📱 TG 头像变更推送成功: @{handle} -> {target_channel_id} | {time_log_str}")
-                return
+                return None  # photo 动作不需要后续翻译编辑
 
         # ──── 计算时间尾部 ────
         tz_cst = timezone(timedelta(hours=8))
@@ -454,14 +455,19 @@ class TelegramDistributor(BaseDistributor):
             elif isinstance(resp_result, list) and len(resp_result) > 0:
                 msg_id = resp_result[0].get("message_id")
 
-            if msg_id and translated_dict:
+            if msg_id:
                 header_no_text = self._format_message(message, include_text=False)
-                asyncio.create_task(
-                    self._translate_and_edit(msg_id, header_no_text, footer, message, translated_dict, target_channel_id, link_preview_options)
-                )
+                return {
+                    "msg_id": msg_id,
+                    "header_no_text": header_no_text,
+                    "footer": footer,
+                    "channel_id": target_channel_id,
+                    "link_preview_options": link_preview_options,
+                }
+        return None
 
     async def _pre_translate(self, message: dict) -> dict[str, str] | None:
-        """在 distribute 层预翻译一次，供所有频道复用。"""
+        """翻译一次，供所有频道复用。"""
         content = message.get("content", {}) or {}
         reference = message.get("reference") or {}
         bio_change = message.get("bio_change") or {}
@@ -505,15 +511,45 @@ class TelegramDistributor(BaseDistributor):
         push_time = datetime.now(tz=tz_cst).strftime("%Y-%m-%d %H:%M:%S")
         time_log_str = f"| 🕐 推文时间: {tweet_time} 📡 推送时间: {push_time}"
 
-        # 预翻译：只调用一次 DeepSeek，所有频道复用同一份翻译结果
-        translated_dict = await self._pre_translate(message)
-
-        # 针对每个订阅该 handle 的频道并发推送（附带预翻译结果）
-        tasks = [
-            self._distribute_to_channel(message, handle, action, cid, time_log_str, translated_dict)
+        # ──── 阶段 1：推送原文 + 翻译 并发执行 ────
+        # 推送任务列表
+        push_tasks = [
+            self._distribute_to_channel(message, handle, action, cid, time_log_str)
             for cid in target_channel_ids
         ]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        # 翻译任务（只调一次 DeepSeek）
+        translate_task = self._pre_translate(message)
+
+        # 并发：所有频道推送 + DeepSeek 翻译 同时执行
+        all_results = await asyncio.gather(
+            *push_tasks, translate_task, return_exceptions=True
+        )
+
+        # 拆分结果：前 N 个是推送结果，最后一个是翻译结果
+        push_results = all_results[:-1]
+        translate_result = all_results[-1]
+
+        # ──── 阶段 2：翻译完成后，批量编辑所有频道 ────
+        if isinstance(translate_result, Exception):
+            logger.error(f"🌐 翻译异常: {translate_result}")
+            return
+        if not translate_result:
+            return  # 无需翻译或翻译失败
+
+        translated_dict = translate_result
+        edit_tasks = []
+        for r in push_results:
+            if isinstance(r, Exception) or r is None:
+                continue
+            edit_tasks.append(
+                self._translate_and_edit(
+                    r["msg_id"], r["header_no_text"], r["footer"],
+                    message, translated_dict, r["channel_id"], r["link_preview_options"]
+                )
+            )
+
+        if edit_tasks:
+            await asyncio.gather(*edit_tasks, return_exceptions=True)
 
 
 # ---------------------------------------------------------------------------
