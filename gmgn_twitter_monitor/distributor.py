@@ -181,7 +181,7 @@ class TelegramDistributor(BaseDistributor):
             return f" · {count / 1_000:.1f}K 粉丝"
         return f" · {count} 粉丝"
 
-    def _format_message(self, msg: dict) -> str:
+    def _format_message(self, msg: dict, include_text: bool = True) -> str:
         """将标准化 JSON 组装为 TG HTML 头部。"""
         action = msg.get("action", "unknown")
         author = msg.get("author", {})
@@ -260,11 +260,12 @@ class TelegramDistributor(BaseDistributor):
                 lines.append("\n<b>新简介:</b>")
                 lines.append(self._escape_html(bio_change.get("after", "")))
         else:
-            content = msg.get("content") or {}
-            text = content.get("text")
-            if text:
-                lines.append("")
-                lines.append(self._escape_html(text))
+            if include_text:
+                content = msg.get("content") or {}
+                text = content.get("text")
+                if text:
+                    lines.append("")
+                    lines.append(self._escape_html(text))
 
         return "\n".join(lines)
 
@@ -302,8 +303,8 @@ class TelegramDistributor(BaseDistributor):
             logger.error(f"📱 TG 推送未知异常: {e}")
             return None
 
-    async def _translate_and_edit(self, message_id: int, header: str, footer: str, message: dict, target_channel_id: str, link_preview_options: dict | None = None) -> None:
-        """异步翻译推文并编辑已发送的 TG 消息，将中文翻译追加到中间。"""
+    async def _translate_and_edit(self, message_id: int, header_no_text: str, footer: str, message: dict, target_channel_id: str, link_preview_options: dict | None = None) -> None:
+        """异步翻译推文并编辑已发送的 TG 消息，如果翻译成功则替换掉原始英文正文。"""
         content = message.get("content", {}) or {}
         reference = message.get("reference") or {}
         bio_change = message.get("bio_change") or {}
@@ -324,9 +325,10 @@ class TelegramDistributor(BaseDistributor):
         if not translated:
             return
 
-        # 极简卡片流结构： 头部 \n\n 翻译 \n\n 尾部
+        # 如果翻译成功，我们将用 translated 替换掉最初带有英文的正文
+        # 极简卡片流结构： 无文本的头部 \n\n 翻译 \n\n 尾部
         separator = "—— 🌐 中文翻译 ——\n"
-        new_text = f"{header}\n\n{separator}{self._escape_html(translated)}\n\n{footer}"
+        new_text = f"{header_no_text}\n\n{separator}{self._escape_html(translated)}\n\n{footer}"
 
         handle = message.get("author", {}).get("handle", "?")
 
@@ -391,8 +393,8 @@ class TelegramDistributor(BaseDistributor):
                 preview_url = f"https://fxtwitter.com/{ref_handle}/status/{ref_tweet_id}"
             elif message.get("tweet_id") and handle:
                 preview_url = f"https://fxtwitter.com/{handle}/status/{message.get('tweet_id')}"
-        elif action in ("reply", "quote"):
-            # 对于 reply 和 quote，fxtwitter 的预览卡片（og:image）往往只显示作者头像。
+        elif action in ("reply", "quote", "delete_post"):
+            # 对于 reply, quote 以及删帖（可能原动作是 reply/quote），fxtwitter 的预览卡片（og:image）往往只显示作者头像。
             # 为了让 TG 预览能渲染出被回复/引用推文中的图片或视频，将预览链接优先指向 parent tweet。
             reference = message.get("reference") or {}
             ref_handle = reference.get("author_handle")
@@ -407,8 +409,7 @@ class TelegramDistributor(BaseDistributor):
             tweet_id = message.get("tweet_id", "")
             if tweet_id and handle:
                 preview_url = f"https://fxtwitter.com/{handle}/status/{tweet_id}"
-        elif action == "delete_post":
-            pass
+        # delete_post 已经并入上方 logic，如果它没有 reference 就会 fallback 到 else 的逻辑
         else:
             if handle:
                 preview_url = f"https://vxtwitter.com/{handle}"
@@ -437,8 +438,9 @@ class TelegramDistributor(BaseDistributor):
                 msg_id = resp_result[0].get("message_id")
 
             if msg_id:
+                header_no_text = self._format_message(message, include_text=False)
                 asyncio.create_task(
-                    self._translate_and_edit(msg_id, header, footer, message, target_channel_id, link_preview_options)
+                    self._translate_and_edit(msg_id, header_no_text, footer, message, target_channel_id, link_preview_options)
                 )
 
     async def distribute(self, message: dict) -> None:
