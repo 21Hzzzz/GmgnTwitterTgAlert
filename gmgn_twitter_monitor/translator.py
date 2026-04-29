@@ -50,7 +50,7 @@ async def translate_texts(texts_dict: dict[str, str]) -> dict[str, str] | None:
         ],
         "stream": False,
         "temperature": 0.3,
-        "max_tokens": 1024,
+        "max_tokens": 2048,
         "response_format": {"type": "json_object"}
     }
 
