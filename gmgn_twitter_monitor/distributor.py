@@ -257,6 +257,12 @@ class TelegramDistributor(BaseDistributor):
                 lines.append(self._escape_html(bio_change.get("before", "")))
                 lines.append("\n<b>新简介:</b>")
                 lines.append(self._escape_html(bio_change.get("after", "")))
+        else:
+            content = msg.get("content") or {}
+            text = content.get("text")
+            if text:
+                lines.append("")
+                lines.append(self._escape_html(text))
 
         return "\n".join(lines)
 
@@ -335,9 +341,9 @@ class TelegramDistributor(BaseDistributor):
         result = await self._send_api("editMessageText", payload)
 
         if result and result.get("ok"):
-            logger.info(f"🌐 TG 翻译追加成功: @{handle}")
+            logger.info(f"🌐 TG 翻译追加成功: @{handle} -> {target_channel_id}")
         else:
-            logger.warning(f"🌐 TG 翻译追加失败: @{handle}")
+            logger.warning(f"🌐 TG 翻译追加失败: @{handle} -> {target_channel_id}")
 
     async def _distribute_to_channel(self, message: dict, handle: str, action: str, target_channel_id: str, time_log_str: str) -> None:
         # ──── photo 动作：由于 FxTwitter 无法展示换头像前后的两张图，需要保留 sendMediaGroup ────
@@ -356,7 +362,7 @@ class TelegramDistributor(BaseDistributor):
                 payload = {"chat_id": target_channel_id, "media": media}
                 result = await self._send_api("sendMediaGroup", payload)
                 if result and result.get("ok"):
-                    logger.info(f"📱 TG 头像变更推送成功: @{handle} {time_log_str}")
+                    logger.info(f"📱 TG 头像变更推送成功: @{handle} -> {target_channel_id} | {time_log_str}")
                 return
 
         # ──── 计算时间尾部 ────
@@ -383,7 +389,19 @@ class TelegramDistributor(BaseDistributor):
                 preview_url = f"https://fxtwitter.com/{ref_handle}/status/{ref_tweet_id}"
             elif message.get("tweet_id") and handle:
                 preview_url = f"https://fxtwitter.com/{handle}/status/{message.get('tweet_id')}"
-        elif action in ("tweet", "reply", "quote"):
+        elif action in ("reply", "quote"):
+            # 对于 reply 和 quote，fxtwitter 的预览卡片（og:image）往往只显示作者头像。
+            # 为了让 TG 预览能渲染出被回复/引用推文中的图片或视频，将预览链接优先指向 parent tweet。
+            reference = message.get("reference") or {}
+            ref_handle = reference.get("author_handle")
+            ref_tweet_id = reference.get("tweet_id")
+            if ref_handle and ref_tweet_id:
+                preview_url = f"https://fxtwitter.com/{ref_handle}/status/{ref_tweet_id}"
+            else:
+                tweet_id = message.get("tweet_id", "")
+                if tweet_id and handle:
+                    preview_url = f"https://fxtwitter.com/{handle}/status/{tweet_id}"
+        elif action == "tweet":
             tweet_id = message.get("tweet_id", "")
             if tweet_id and handle:
                 preview_url = f"https://fxtwitter.com/{handle}/status/{tweet_id}"
@@ -407,7 +425,7 @@ class TelegramDistributor(BaseDistributor):
         result = await self._send_api("sendMessage", payload)
         
         if result and result.get("ok"):
-            logger.info(f"📱 TG 极简推送成功: @{handle} {time_log_str}")
+            logger.info(f"📱 TG 极简推送成功: @{handle} -> {target_channel_id} | {time_log_str}")
 
             resp_result = result.get("result")
             msg_id = None
