@@ -267,6 +267,7 @@ class TelegramDistributor(BaseDistributor):
                 content = msg.get("content") or {}
                 text = content.get("text")
                 if text:
+                    if len(text) > 1500: text = text[:1500] + "...\n[原文过长已截断]"
                     lines.append("")
                     lines.append(self._escape_html(text))
 
@@ -274,6 +275,7 @@ class TelegramDistributor(BaseDistributor):
                 reference = msg.get("reference") or {}
                 ref_text = reference.get("text")
                 if ref_text:
+                    if len(ref_text) > 1500: ref_text = ref_text[:1500] + "...\n[原文过长已截断]"
                     lines.append("")
                     lines.append(f"<blockquote>💬 原推：\n{self._escape_html(ref_text)}</blockquote>")
 
@@ -341,8 +343,10 @@ class TelegramDistributor(BaseDistributor):
         translated_html_parts = []
         if main_text or bio_text:
             text_to_show = main_text if main_text else bio_text
+            if len(text_to_show) > 1500: text_to_show = text_to_show[:1500] + "...\n[原文过长已截断]"
             translated_html_parts.append(self._escape_html(text_to_show))
         if ref_text:
+            if len(ref_text) > 1500: ref_text = ref_text[:1500] + "...\n[原文过长已截断]"
             translated_html_parts.append(f"<blockquote>💬 原推翻译：\n{self._escape_html(ref_text)}</blockquote>")
 
         translated_html = "\n\n".join(translated_html_parts)
