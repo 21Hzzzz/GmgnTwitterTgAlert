@@ -313,8 +313,8 @@ class TelegramDistributor(BaseDistributor):
             logger.error(f"📱 TG 推送未知异常: {e}")
             return None
 
-    async def _translate_and_edit(self, message_id: int, header_no_text: str, footer: str, message: dict, target_channel_id: str, link_preview_options: dict | None = None) -> None:
-        """异步翻译推文并编辑已发送的 TG 消息，如果翻译成功则替换掉原始英文正文。"""
+    async def _translate_and_edit(self, message_id: int, header_no_text: str, footer: str, message: dict, translated_dict: dict[str, str], target_channel_id: str, link_preview_options: dict | None = None) -> None:
+        """使用预翻译结果编辑已发送的 TG 消息，替换英文正文为中文。"""
         content = message.get("content", {}) or {}
         reference = message.get("reference") or {}
         bio_change = message.get("bio_change") or {}
@@ -326,25 +326,16 @@ class TelegramDistributor(BaseDistributor):
         if bio_change.get("after"):
             text_parts["bio"] = bio_change["after"]
 
-        if not text_parts:
-            return
-
-        from .translator import translate_texts
-        translated_dict = await translate_texts(text_parts)
-        if not translated_dict:
-            return
-
-        # 获取翻译后的文本（如果返回 dict 中缺失，则 fallback 到原文，防止因为单字段出错导致全部消失）
+        # 获取翻译后的文本（如果返回 dict 中缺失，则 fallback 到原文）
         main_text = translated_dict.get("content") or text_parts.get("content", "")
         ref_text = translated_dict.get("reference") or text_parts.get("reference", "")
         bio_text = translated_dict.get("bio") or text_parts.get("bio", "")
 
-        # 判断内容是否真的有改变（比如全都是标点符号或者原样返回了中文）
-        # 如果经过翻译器后还是完全一样，就没必要更新 TG 消息
+        # 判断内容是否真的有改变
         if (main_text == text_parts.get("content", "") and 
             ref_text == text_parts.get("reference", "") and 
             bio_text == text_parts.get("bio", "")):
-            logger.info("🌐 翻译结果与原文相同，跳过编辑。")
+            logger.info(f"🌐 翻译结果与原文相同，跳过编辑: {target_channel_id}")
             return
 
         translated_html_parts = []
@@ -378,7 +369,7 @@ class TelegramDistributor(BaseDistributor):
         else:
             logger.warning(f"🌐 TG 翻译追加失败: @{handle} -> {target_channel_id}")
 
-    async def _distribute_to_channel(self, message: dict, handle: str, action: str, target_channel_id: str, time_log_str: str) -> None:
+    async def _distribute_to_channel(self, message: dict, handle: str, action: str, target_channel_id: str, time_log_str: str, translated_dict: dict[str, str] | None = None) -> None:
         # ──── photo 动作：由于 FxTwitter 无法展示换头像前后的两张图，需要保留 sendMediaGroup ────
         if action == "photo":
             avatar_change = message.get("avatar_change") or {}
@@ -423,8 +414,6 @@ class TelegramDistributor(BaseDistributor):
             elif message.get("tweet_id") and handle:
                 preview_url = f"https://fxtwitter.com/{handle}/status/{message.get('tweet_id')}"
         elif action in ("reply", "quote", "delete_post"):
-            # 对于 reply, quote 以及删帖（可能原动作是 reply/quote），fxtwitter 的预览卡片（og:image）往往只显示作者头像。
-            # 为了让 TG 预览能渲染出被回复/引用推文中的图片或视频，将预览链接优先指向 parent tweet。
             reference = message.get("reference") or {}
             ref_handle = reference.get("author_handle")
             ref_tweet_id = reference.get("tweet_id")
@@ -438,7 +427,6 @@ class TelegramDistributor(BaseDistributor):
             tweet_id = message.get("tweet_id", "")
             if tweet_id and handle:
                 preview_url = f"https://fxtwitter.com/{handle}/status/{tweet_id}"
-        # delete_post 已经并入上方 logic，如果它没有 reference 就会 fallback 到 else 的逻辑
         else:
             if handle:
                 preview_url = f"https://vxtwitter.com/{handle}"
@@ -466,11 +454,30 @@ class TelegramDistributor(BaseDistributor):
             elif isinstance(resp_result, list) and len(resp_result) > 0:
                 msg_id = resp_result[0].get("message_id")
 
-            if msg_id:
+            if msg_id and translated_dict:
                 header_no_text = self._format_message(message, include_text=False)
                 asyncio.create_task(
-                    self._translate_and_edit(msg_id, header_no_text, footer, message, target_channel_id, link_preview_options)
+                    self._translate_and_edit(msg_id, header_no_text, footer, message, translated_dict, target_channel_id, link_preview_options)
                 )
+
+    async def _pre_translate(self, message: dict) -> dict[str, str] | None:
+        """在 distribute 层预翻译一次，供所有频道复用。"""
+        content = message.get("content", {}) or {}
+        reference = message.get("reference") or {}
+        bio_change = message.get("bio_change") or {}
+        text_parts = {}
+        if content.get("text"):
+            text_parts["content"] = content["text"]
+        if reference.get("text"):
+            text_parts["reference"] = reference["text"]
+        if bio_change.get("after"):
+            text_parts["bio"] = bio_change["after"]
+
+        if not text_parts:
+            return None
+
+        from .translator import translate_texts
+        return await translate_texts(text_parts)
 
     async def distribute(self, message: dict) -> None:
         if not self._session:
@@ -486,7 +493,7 @@ class TelegramDistributor(BaseDistributor):
         target_channel_ids = self.channel_map.get(h_lower, [])
         if not target_channel_ids:
             if not self.enable_default:
-                return  # 未在专用分组中，且大杂烩频道关闭，则丢弃
+                return
             target_channel_ids = [self.default_channel_id] if self.default_channel_id else []
 
         if not target_channel_ids:
@@ -498,9 +505,12 @@ class TelegramDistributor(BaseDistributor):
         push_time = datetime.now(tz=tz_cst).strftime("%Y-%m-%d %H:%M:%S")
         time_log_str = f"| 🕐 推文时间: {tweet_time} 📡 推送时间: {push_time}"
 
-        # 针对每个订阅该 handle 的频道并发推送
+        # 预翻译：只调用一次 DeepSeek，所有频道复用同一份翻译结果
+        translated_dict = await self._pre_translate(message)
+
+        # 针对每个订阅该 handle 的频道并发推送（附带预翻译结果）
         tasks = [
-            self._distribute_to_channel(message, handle, action, cid, time_log_str)
+            self._distribute_to_channel(message, handle, action, cid, time_log_str, translated_dict)
             for cid in target_channel_ids
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
