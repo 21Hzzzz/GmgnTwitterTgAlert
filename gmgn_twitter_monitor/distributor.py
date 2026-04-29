@@ -275,7 +275,7 @@ class TelegramDistributor(BaseDistributor):
                 ref_text = reference.get("text")
                 if ref_text:
                     lines.append("")
-                    lines.append(f"<blockquote>{self._escape_html(ref_text)}</blockquote>")
+                    lines.append(f"<blockquote>💬 原推：\n{self._escape_html(ref_text)}</blockquote>")
 
         return "\n".join(lines)
 
@@ -345,7 +345,7 @@ class TelegramDistributor(BaseDistributor):
             parts = translated.split("\n---\n", 1)
             main_part = self._escape_html(parts[0].strip())
             ref_part = self._escape_html(parts[1].strip())
-            translated_html = f"{main_part}\n\n<blockquote>{ref_part}</blockquote>"
+            translated_html = f"{main_part}\n\n<blockquote>💬 原推翻译：\n{ref_part}</blockquote>"
         else:
             translated_html = self._escape_html(translated)
 
