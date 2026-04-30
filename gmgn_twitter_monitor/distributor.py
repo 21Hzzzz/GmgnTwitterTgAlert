@@ -433,7 +433,22 @@ class TelegramDistributor(BaseDistributor):
                 preview_url = f"https://fxtwitter.com/{ref_handle}/status/{ref_tweet_id}"
             elif message.get("tweet_id") and handle:
                 preview_url = f"https://fxtwitter.com/{handle}/status/{message.get('tweet_id')}"
-        elif action in ("reply", "quote", "delete_post"):
+        elif action in ("reply", "quote"):
+            reference = message.get("reference") or {}
+            ref_handle = reference.get("author_handle")
+            ref_tweet_id = reference.get("tweet_id")
+            content = message.get("content") or {}
+            has_media = len(content.get("media") or []) > 0
+            
+            if has_media and message.get("tweet_id") and handle:
+                preview_url = f"https://fxtwitter.com/{handle}/status/{message.get('tweet_id')}"
+            elif ref_handle and ref_tweet_id:
+                preview_url = f"https://fxtwitter.com/{ref_handle}/status/{ref_tweet_id}"
+            else:
+                tweet_id = message.get("tweet_id", "")
+                if tweet_id and handle:
+                    preview_url = f"https://fxtwitter.com/{handle}/status/{tweet_id}"
+        elif action == "delete_post":
             reference = message.get("reference") or {}
             ref_handle = reference.get("author_handle")
             ref_tweet_id = reference.get("tweet_id")
