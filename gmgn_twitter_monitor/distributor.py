@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
+import os
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Set
@@ -584,6 +586,344 @@ class TelegramDistributor(BaseDistributor):
 
         if edit_tasks:
             await asyncio.gather(*edit_tasks, return_exceptions=True)
+
+
+# ---------------------------------------------------------------------------
+#  飞书分组推送分发器
+# ---------------------------------------------------------------------------
+class FeishuDistributor(BaseDistributor):
+    """通过飞书自定义机器人 Webhook 推送交互式卡片消息（按组路由），附带自动大图解析。"""
+
+    def __init__(self, app_id: str, app_secret: str, default_webhook: str, default_secret: str, enable_default: bool = False, channel_map: dict[str, list[dict]] | None = None, filter_handles: list[str] | None = None):
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.default_webhook = default_webhook
+        self.default_secret = default_secret
+        self.enable_default = enable_default
+        self.channel_map = channel_map or {}
+        self.filter_handles = [h.lower() for h in (filter_handles or [])]
+        self._session: aiohttp.ClientSession | None = None
+        self._tenant_access_token: str = ""
+        self._token_expire_time: float = 0
+
+    async def start(self):
+        if not self.default_webhook and not self.channel_map:
+            logger.info("📱 飞书分发器未配置 Webhook/Routing，已跳过启动")
+            return
+        self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        filter_desc = ", ".join(self.filter_handles) if self.filter_handles else "全部"
+        logger.success(f"📱 飞书分发器已启动 (默认开启: {self.enable_default}, 分组数: {len(self.channel_map)}, 过滤: {filter_desc})")
+
+    async def stop(self):
+        if self._session:
+            await self._session.close()
+            logger.info("📱 飞书分发器已关闭")
+
+    def _should_forward(self, message: dict) -> bool:
+        if not self.filter_handles:
+            return True
+        handle = message.get("author", {}).get("handle", "")
+        return handle.lower() in self.filter_handles
+
+    async def _get_tenant_access_token(self) -> str:
+        """获取并缓存 tenant_access_token (有效期一般2小时，提前5分钟刷新)"""
+        if not self.app_id or not self.app_secret:
+            return ""
+        now = time.time()
+        if self._tenant_access_token and now < self._token_expire_time - 300:
+            return self._tenant_access_token
+
+        url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+        payload = {"app_id": self.app_id, "app_secret": self.app_secret}
+        try:
+            async with self._session.post(url, json=payload) as resp:
+                data = await resp.json()
+                if data.get("code") == 0:
+                    self._tenant_access_token = data.get("tenant_access_token")
+                    self._token_expire_time = now + data.get("expire", 7200)
+                    logger.debug("🔑 成功获取/刷新飞书 tenant_access_token")
+                    return self._tenant_access_token
+                else:
+                    logger.warning(f"🔑 获取飞书 token 失败 (如未开通权限可忽略): {data}")
+        except Exception as e:
+            logger.error(f"🔑 获取飞书 token 异常: {e}")
+        return ""
+
+    async def _upload_image(self, img_url: str) -> str:
+        """下载外网图片并上传到飞书，返回 image_key"""
+        token = await self._get_tenant_access_token()
+        if not token:
+            return ""
+        try:
+            # 1. 下载图片 (优先使用环境变量中的代理，如果没有则直连)
+            proxy = os.getenv("http_proxy") or os.getenv("https_proxy")
+            async with self._session.get(img_url, proxy=proxy, timeout=10) as r:
+                if r.status >= 300: return ""
+                img_bytes = await r.read()
+            
+            # 2. 上传至飞书
+            form = aiohttp.FormData()
+            form.add_field('image_type', 'message')
+            form.add_field('image', img_bytes, filename='image.jpg', content_type='image/jpeg')
+            
+            headers = {"Authorization": f"Bearer {token}"}
+            up_url = "https://open.feishu.cn/open-apis/im/v1/images"
+            async with self._session.post(up_url, headers=headers, data=form) as r:
+                up_data = await r.json()
+                if up_data.get("code") == 0:
+                    return up_data["data"]["image_key"]
+                else:
+                    logger.error(f"🖼️ 飞书上传图片报错: {up_data}")
+        except Exception as e:
+            logger.error(f"🖼️ 飞书图片处理异常: {e}")
+        return ""
+
+    def _gen_sign(self, secret: str, timestamp: int) -> str:
+        string_to_sign = f'{timestamp}\n{secret}'
+        hmac_code = hmac.new(string_to_sign.encode("utf-8"), digestmod=hashlib.sha256).digest()
+        return base64.b64encode(hmac_code).decode('utf-8')
+
+    def _format_markdown(self, msg: dict, translated_dict: dict | None = None, has_video: bool = False) -> tuple[str, str, str]:
+        """返回 (标题, 标题颜色, Markdown内容)"""
+        translated_dict = translated_dict or {}
+        action = msg.get("action", "unknown")
+        author = msg.get("author", {})
+        handle = author.get("handle", "unknown")
+        author_name = author.get("name") or handle
+        author_followers = author.get("followers") or 0
+        
+        followers_str = f"{author_followers}"
+        if author_followers >= 1_000_000:
+            followers_str = f"{author_followers / 1_000_000:.1f}M"
+        elif author_followers >= 1_000:
+            followers_str = f"{author_followers / 1_000:.1f}K"
+
+        action_map = {
+            "tweet": ("📝 发布新推文", "blue"),
+            "repost": ("🔄 转推", "green"),
+            "reply": ("💬 回复", "purple"),
+            "quote": ("📌 引用推文", "purple"),
+            "follow": ("✅ 新增关注", "green"),
+            "unfollow": ("❌ 取消关注", "red"),
+            "delete_post": ("🗑️ 删除推文", "red"),
+            "photo": ("🖼️ 更换头像", "yellow"),
+            "description": ("⇧ 简介更新", "yellow"),
+            "name": ("📛 更改昵称", "yellow"),
+            "pin": ("📌 置顶推文", "blue"),
+            "unpin": ("📍 取消置顶", "grey"),
+        }
+        action_text, color = action_map.get(action, (f"❓ {action}", "blue"))
+
+        lines = []
+        lines.append(f"👤 [{author_name} @{handle}](https://x.com/{handle}) · *{followers_str} 粉丝*")
+        lines.append("---")
+        
+        # Follow / Unfollow
+        if action in ("follow", "unfollow"):
+            unfollow_target = msg.get("unfollow_target", {})
+            t_handle = unfollow_target.get("handle", "?")
+            t_name = unfollow_target.get("name") or t_handle
+            
+            t_followers = unfollow_target.get("followers") or 0
+            t_followers_str = f"{t_followers}"
+            if t_followers >= 1_000_000:
+                t_followers_str = f"{t_followers / 1_000_000:.1f}M"
+            elif t_followers >= 1_000:
+                t_followers_str = f"{t_followers / 1_000:.1f}K"
+                
+            t_bio = unfollow_target.get("bio", "")
+            
+            prefix = "关注了" if action == "follow" else "取关了"
+            lines.append(f"**{prefix}** [{t_name} @{t_handle}](https://x.com/{t_handle}) · *{t_followers_str} 粉丝*")
+            if t_bio:
+                clean_bio = t_bio.replace('\n', '  ')
+                if len(clean_bio) > 200: clean_bio = clean_bio[:200] + "..."
+                lines.append(f"> 简介：*{clean_bio}*")
+        
+        # Content
+        content = msg.get("content", {}) or {}
+        text = content.get("text", "")
+        
+        if translated_dict.get("content"):
+            t_text = translated_dict.get("content")
+            if len(t_text) > 1500: t_text = t_text[:1500] + "...\n[原文过长已截断]"
+            lines.append(t_text)
+            # 原文做对比
+            if text and len(text) <= 80 and any(c.isalpha() or c.isdigit() for c in text):
+                clean_orig = text.strip().replace('\n', ' ')
+                lines.append(f"*( {clean_orig} )*")
+        elif text:
+            if len(text) > 1500: text = text[:1500] + "...\n[原文过长已截断]"
+            lines.append(text)
+            
+        if has_video:
+            lines.append("")
+            lines.append("▶️ *[本推文包含视频，请点击下方原文链接观看]*")
+        
+        # Reference (Quote, Reply, Delete)
+        reference = msg.get("reference", {}) or {}
+        ref_text = reference.get("text", "")
+        ref_handle = reference.get("author_handle")
+        if ref_handle:
+            lines.append("")
+            prefix_map = {"repost": "🔄 转推自", "reply": "💬 回复给", "quote": "📌 引用"}
+            prefix = prefix_map.get(action, "➡️ 目标：")
+            lines.append(f"**{prefix}** [@{ref_handle}](https://x.com/{ref_handle})")
+            
+        if translated_dict.get("reference"):
+            t_ref = translated_dict.get("reference")
+            if len(t_ref) > 1000: t_ref = t_ref[:1000] + "...\n[原文过长已截断]"
+            clean_ref = t_ref.replace('\n', '  ')
+            lines.append(f"> *{clean_ref}*")
+        elif ref_text:
+            if len(ref_text) > 1000: ref_text = ref_text[:1000] + "...\n[原文过长已截断]"
+            clean_ref = ref_text.replace('\n', '  ')
+            lines.append(f"> *{clean_ref}*")
+
+        # Links
+        tweet_id = msg.get("tweet_id")
+        if tweet_id:
+            lines.append("---")
+            lines.append(f"[🔗 原文链接](https://fxtwitter.com/{handle}/status/{tweet_id})")
+
+        return action_text, color, "\n".join(lines)
+
+    async def _send_to_webhook(self, webhook: str, secret: str, payload: dict, handle: str, time_log_str: str) -> None:
+        try:
+            # 注入签名
+            timestamp = int(time.time())
+            if secret:
+                payload["timestamp"] = str(timestamp)
+                payload["sign"] = self._gen_sign(secret, timestamp)
+            
+            async with self._session.post(webhook, json=payload) as resp:
+                if resp.status < 300:
+                    logger.info(f"📱 飞书推送成功: @{handle} {time_log_str}")
+                else:
+                    body = await resp.text()
+                    logger.error(f"📱 飞书推送失败: @{handle} [{resp.status}]: {body[:200]}")
+        except Exception as e:
+            logger.error(f"📱 飞书推送异常: @{handle} - {e}")
+
+    async def distribute(self, message: dict) -> None:
+        if not self._session:
+            return
+        if not self._should_forward(message):
+            return
+
+        handle = message.get("author", {}).get("handle", "?").lower()
+        
+        # 查找目标配置
+        target_configs = self.channel_map.get(handle, [])
+        if not target_configs:
+            if not self.enable_default:
+                return
+            if self.default_webhook:
+                target_configs = [{"webhook": self.default_webhook, "secret": self.default_secret}]
+        
+        if not target_configs:
+            return
+
+        # 时间日志
+        tz_cst = timezone(timedelta(hours=8))
+        ts = message.get("timestamp", 0)
+        tweet_time = datetime.fromtimestamp(ts, tz=tz_cst).strftime("%Y-%m-%d %H:%M:%S") if ts else "未知"
+        push_time = datetime.now(tz=tz_cst).strftime("%Y-%m-%d %H:%M:%S")
+        time_log_str = f"| 🕐 推文时间: {tweet_time} 📡 推送时间: {push_time}"
+
+        # --- 并发执行: 翻译 + 图片上传 ---
+        content = message.get("content", {}) or {}
+        reference = message.get("reference") or {}
+        bio_change = message.get("bio_change") or {}
+        text_parts = {}
+        if content.get("text"):
+            text_parts["content"] = content["text"]
+        if reference.get("text"):
+            text_parts["reference"] = reference["text"]
+        if bio_change.get("after"):
+            text_parts["bio"] = bio_change["after"]
+
+        # 解析图片与视频封面
+        content_media = content.get("media") or []
+        if not content_media:
+            content_media = reference.get("media") or []
+            
+        photo_urls = []
+        has_video = False
+        for m in content_media:
+            m_type = m.get("type")
+            m_url = m.get("url")
+            if not m_url: continue
+            
+            if m_type in ("photo", "image", "thumbnail"):
+                photo_urls.append(m_url)
+            elif m_type == "video":
+                has_video = True
+
+        translate_task = None
+        if text_parts:
+            from .translator import translate_texts
+            translate_task = translate_texts(text_parts)
+            
+        upload_tasks = [self._upload_image(url) for url in photo_urls]
+
+        # 阻塞等待所有并发任务完成
+        results = await asyncio.gather(*upload_tasks, translate_task if translate_task else asyncio.sleep(0), return_exceptions=True)
+
+        # 解析翻译结果
+        translated_dict = {}
+        if translate_task:
+            t_res = results[-1]
+            if isinstance(t_res, Exception):
+                logger.error(f"🌐 飞书翻译失败: {t_res}")
+            elif t_res:
+                translated_dict = t_res
+
+        # 解析上传图片的 image_key
+        img_keys = []
+        for res in (results[:-1] if translate_task else results):
+            if isinstance(res, str) and res:
+                img_keys.append(res)
+
+        # --- 组装 Markdown 和卡片 ---
+        title, color, markdown_text = self._format_markdown(message, translated_dict, has_video=has_video)
+        
+        elements = [
+            {
+                "tag": "markdown",
+                "content": markdown_text
+            }
+        ]
+
+        # 将成功上传的图片直接内嵌到卡片中
+        for key in img_keys:
+            elements.append({
+                "tag": "img",
+                "img_key": key,
+                "alt": {"tag": "plain_text", "content": "Twitter Image"}
+            })
+
+        payload = {
+            "msg_type": "interactive",
+            "card": {
+                "config": {"wide_screen_mode": True},
+                "header": {
+                    "template": color,
+                    "title": {
+                        "content": title,
+                        "tag": "plain_text"
+                    }
+                },
+                "elements": elements
+            }
+        }
+        
+        tasks = []
+        for conf in target_configs:
+            tasks.append(self._send_to_webhook(conf["webhook"], conf["secret"], payload, handle, time_log_str))
+        
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 # ---------------------------------------------------------------------------

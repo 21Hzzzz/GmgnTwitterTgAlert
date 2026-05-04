@@ -20,6 +20,7 @@ from .distributor import (
     DistributorHub,
     LoggingDistributor,
     TelegramDistributor,
+    FeishuDistributor,
     WebhookDistributor,
     WebSocketDistributor,
 )
@@ -148,7 +149,17 @@ def _build_distributor_hub() -> DistributorHub:
             channel_map=config.TG_CHANNEL_MAP,
             filter_handles=config.TG_FILTER_HANDLES,
         ),
-        # 4. Webhook HTTP POST
+        # 4. 飞书分组推送 (与 TG 分组同源并发)
+        FeishuDistributor(
+            app_id=config.FEISHU_APP_ID,
+            app_secret=config.FEISHU_APP_SECRET,
+            default_webhook=config.FEISHU_WEBHOOK_DEFAULT,
+            default_secret=config.FEISHU_SECRET_DEFAULT,
+            enable_default=config.FEISHU_ENABLE_DEFAULT,
+            channel_map=config.FEISHU_CHANNEL_MAP,
+            filter_handles=config.TG_FILTER_HANDLES,
+        ),
+        # 5. Webhook HTTP POST
         WebhookDistributor(
             url=config.WEBHOOK_URL,
             secret=config.WEBHOOK_SECRET,

@@ -129,11 +129,13 @@ nano .env
 |--------|:----:|------|
 | `WS_TOKEN` | ✅ | WebSocket 鉴权 Token，建议用 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 生成 |
 | `TG_BOT_TOKEN` | ✅ | Telegram Bot API Token |
+| `FEISHU_APP_ID` | ❌ | 飞书企业自建应用 App ID (用于卡片原图提取与上传) |
+| `FEISHU_APP_SECRET` | ❌ | 飞书企业自建应用 App Secret |
 | `TG_ENABLE_DEFAULT` | ❌ | 默认频道推送开关（`True`/`False`），默认 `False` |
 | `TG_CHANNEL_ID` | ❌ | 默认/兜底频道 ID（未命中任何路由分组时使用） |
 | `TG_ENABLE_<GROUP>` | ❌ | 分组推送开关，如 `TG_ENABLE_BINANCE=True` |
 | `TG_CHANNEL_ID_<GROUP>` | ❌ | 分组目标频道 ID，如 `TG_CHANNEL_ID_BINANCE=-100xxx` |
-| `TG_ROUTING_<GROUP>` | ❌ | 分组内的推特 Handle 列表（逗号分隔），如 `TG_ROUTING_BINANCE=cz_binance,heyibinance` |
+| `TG_ROUTING_<GROUP>` | ❌ | 分组内的推特 Handle 列表（逗号分隔），如 `TG_ROUTING_BINANCE=cz_binance` |
 | `TG_FILTER_HANDLES` | ❌ | 附加白名单（一般留空，路由分组的 Handle 会自动合并） |
 | `DEEPSEEK_API_KEY` | ❌ | DeepSeek API Key，留空则跳过翻译 |
 | `WEBHOOK_URL` | ❌ | Webhook 推送目标 URL，留空则禁用 |
@@ -141,16 +143,46 @@ nano .env
 
 #### 多频道路由分组规则
 
-每个路由分组需要定义**三个后缀一致**的变量（例如后缀为 `BINANCE`）：
+每个路由分组需要定义**一致的后缀**（例如后缀为 `BINANCE`）：
 
 ```env
+# TG 频道配置
 TG_ENABLE_BINANCE=True                              # 开关
 TG_CHANNEL_ID_BINANCE=-1001234567891                 # 目标频道
 TG_ROUTING_BINANCE=cz_binance,heyibinance            # 博主列表
+
+# 飞书群聊配置 (支持原生提取大图渲染)
+FEISHU_ENABLE_BINANCE=True                           # 飞书开关
+FEISHU_WEBHOOK_BINANCE=https://open.feishu.cn/...    # 飞书群自定义机器人 Webhook
+FEISHU_SECRET_BINANCE=your-secret                    # 飞书安全签名密钥
 ```
 
 - 同一个 Handle 可以出现在多个分组中，会同时推送到所有匹配的频道
 - `TG_FILTER_HANDLES` 无需手动填写路由分组里的 Handle，系统会自动合并
+
+### 飞书群组配置与避坑指南
+
+为了实现类似 Telegram Channel 的**纯净只读情报群**体验，并且避开企业内网的权限墙，请严格遵循以下配置指南：
+
+1. **创建外部群聊（强烈建议）**：在飞书创建群聊时，**务必选择创建“外部群聊”**。如果你创建的是企业内部群，自定义机器人可能会受限于企业组织架构的安全策略而无法正常发言或被外部人员查看。
+2. **添加机器人**：在飞书群设置的“群机器人”中添加“自定义机器人”，获取 Webhook URL 和安全签名 Secret 填入 `.env` 中对应的分组。
+3. **开启全员禁言**：进入群设置 -> 群管理 -> 谁可以在此群发言，将其修改为 **“仅群主和群管理员”**。
+4. **安全与纯净加固**（可选）：将群管理中的“谁可以@所有人”、“发起视频会议”、“Pin”、“编辑群信息”等也全部改为 **“仅群主和群管理员”**。
+
+**原理解析：**
+经过实测，由群主（或管理员）创建的**自定义 Webhook 机器人**默认继承高级权限，能够无视“仅群主和群管理员可发言”的全局禁言锁，继续向群内顺畅推送情报，而普通群员则完全无法打字发言。
+
+**避坑：原生大图与服务器网络配置**
+为了弥补飞书不支持直接渲染外部图片链接的缺陷，本系统在底层设计了独特的**双线程并发机制**：
+1. **借尸还魂**：利用 `.env` 中的 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`（该应用需在飞书开发者后台开通 `im:resource:upload` 获取与上传图片或文件权限并发布新版本），将 Twitter 的外网原图（包括视频的封面）极速下载并以应用的身份上传给飞书，获取合法内网 `img_key`。
+2. **瞒天过海**：与此同时，并发调用 DeepSeek 获取中文翻译。当两路异步任务瞬间完成后，系统会将带有内网图片的精美卡片，依然使用能穿透禁言的 Webhook 机器人发送。
+
+> **⚠️ 网络代理避坑警告 (非常重要)**: 
+> 飞书上传大图的前提是：系统能够成功下载推特的原图（pbs.twimg.com）。
+> - **如果你的服务器在海外（如 AWS 东京/美国节点）**：程序会自动直连，千万不要在环境变量中乱配 `http_proxy` 或在系统中开启没用的本地翻墙代理端口，否则会导致下载图片请求超时失败，最终导致飞书卡片渲染不出任何图片和视频封面（变成干瘪的纯文字或空卡片）。
+> - **如果你的服务器在国内**：必须正确配置并导出全局的 `http_proxy` / `https_proxy` 环境变量（如 `export http_proxy=http://127.0.0.1:7890`），程序会自动读取并走代理通道下载原图。
+
+
 
 ### 5. 首次运行与授权
 

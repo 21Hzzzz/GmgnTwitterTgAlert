@@ -32,23 +32,40 @@ TG_CHANNEL_ID = os.getenv("TG_CHANNEL_ID", "")
 
 # 动态解析路由分组
 TG_CHANNEL_MAP: dict[str, list[str]] = {}
+FEISHU_CHANNEL_MAP: dict[str, list[dict]] = {}
 _routing_handles = set()
 
 for k, v in os.environ.items():
     if k.startswith("TG_ROUTING_") and v:
         group_name = k[len("TG_ROUTING_"):]
-        enable_str = os.getenv(f"TG_ENABLE_{group_name}", "True").lower()
-        if enable_str not in ("true", "1", "yes"):
-            continue  # 若该分组关闭推送，则忽略
+        handles = [h.strip().lower() for h in v.split(",") if h.strip()]
 
-        channel_id = os.getenv(f"TG_CHANNEL_ID_{group_name}")
-        if channel_id:
-            handles = [h.strip().lower() for h in v.split(",") if h.strip()]
-            for h in handles:
-                if h not in TG_CHANNEL_MAP:
-                    TG_CHANNEL_MAP[h] = []
-                if channel_id not in TG_CHANNEL_MAP[h]:
-                    TG_CHANNEL_MAP[h].append(channel_id)
+        # 解析 TG 路由
+        tg_enable_str = os.getenv(f"TG_ENABLE_{group_name}", "True").lower()
+        if tg_enable_str in ("true", "1", "yes"):
+            channel_id = os.getenv(f"TG_CHANNEL_ID_{group_name}")
+            if channel_id:
+                for h in handles:
+                    if h not in TG_CHANNEL_MAP:
+                        TG_CHANNEL_MAP[h] = []
+                    if channel_id not in TG_CHANNEL_MAP[h]:
+                        TG_CHANNEL_MAP[h].append(channel_id)
+                    _routing_handles.add(h)
+        
+        # 解析飞书路由 (共用 TG_ROUTING 的 handle 列表)
+        fs_enable_str = os.getenv(f"FEISHU_ENABLE_{group_name}", "True").lower()
+        if fs_enable_str in ("true", "1", "yes"):
+            fs_webhook = os.getenv(f"FEISHU_WEBHOOK_{group_name}")
+            fs_secret = os.getenv(f"FEISHU_SECRET_{group_name}", "")
+            if fs_webhook:
+                for h in handles:
+                    if h not in FEISHU_CHANNEL_MAP:
+                        FEISHU_CHANNEL_MAP[h] = []
+                    if not any(item['webhook'] == fs_webhook for item in FEISHU_CHANNEL_MAP[h]):
+                        FEISHU_CHANNEL_MAP[h].append({
+                            "webhook": fs_webhook,
+                            "secret": fs_secret
+                        })
                 _routing_handles.add(h)
 
 TG_FILTER_HANDLES = [
@@ -59,6 +76,13 @@ TG_FILTER_HANDLES = [
 # 自动将启用路由组中的博主并入全局监控白名单
 if _routing_handles:
     TG_FILTER_HANDLES = list(set(TG_FILTER_HANDLES) | _routing_handles)
+
+# ---------- 飞书推送配置 ----------
+FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
+FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
+FEISHU_WEBHOOK_DEFAULT = os.getenv("FEISHU_WEBHOOK_DEFAULT", "")
+FEISHU_SECRET_DEFAULT = os.getenv("FEISHU_SECRET_DEFAULT", "")
+FEISHU_ENABLE_DEFAULT = os.getenv("FEISHU_ENABLE_DEFAULT", "False").lower() in ("true", "1", "yes")
 
 # ---------- Webhook 推送配置 ----------
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
