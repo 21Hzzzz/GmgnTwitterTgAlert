@@ -269,7 +269,7 @@ class TelegramDistributor(BaseDistributor):
                 content = msg.get("content") or {}
                 text = content.get("text")
                 if text:
-                    if len(text) > 1500: text = text[:1500] + "...\n[原文过长已截断]"
+                    if len(text) > 800: text = text[:800] + "...\n[⬇️ 正文过长已截断]"
                     lines.append("")
                     lines.append(self._escape_html(text))
 
@@ -277,7 +277,7 @@ class TelegramDistributor(BaseDistributor):
                 reference = msg.get("reference") or {}
                 ref_text = reference.get("text")
                 if ref_text:
-                    if len(ref_text) > 1500: ref_text = ref_text[:1500] + "...\n[原文过长已截断]"
+                    if len(ref_text) > 500: ref_text = ref_text[:500] + "...\n[⬇️ 原推过长已截断]"
                     lines.append("")
                     lines.append(f"<blockquote>💬 原推：\n{self._escape_html(ref_text)}</blockquote>")
 
@@ -342,9 +342,10 @@ class TelegramDistributor(BaseDistributor):
             logger.info(f"🌐 翻译结果与原文相同，跳过编辑: {target_channel_id}")
             return
 
-        def format_part(translated: str, original: str) -> str:
-            if len(translated) > 1500: 
-                translated = translated[:1500] + "...\n[原文过长已截断]"
+        def format_part(translated: str, original: str, is_ref: bool = False) -> str:
+            limit = 500 if is_ref else 800
+            if len(translated) > limit: 
+                translated = translated[:limit] + "...\n[⬇️ 译文过长已截断]"
             escaped = self._escape_html(translated)
             
             # 如果原文较短（<=80字符）且有实际翻译，附加斜体原文做对比
@@ -360,10 +361,10 @@ class TelegramDistributor(BaseDistributor):
         if main_text or bio_text:
             t_text = main_text if main_text else bio_text
             o_text = text_parts.get("content", "") if main_text else text_parts.get("bio", "")
-            translated_html_parts.append(format_part(t_text, o_text))
+            translated_html_parts.append(format_part(t_text, o_text, is_ref=False))
         if ref_text:
             o_ref = text_parts.get("reference", "")
-            escaped_ref = format_part(ref_text, o_ref)
+            escaped_ref = format_part(ref_text, o_ref, is_ref=True)
             translated_html_parts.append(f"<blockquote>💬 原推翻译：\n{escaped_ref}</blockquote>")
 
         translated_html = "\n\n".join(translated_html_parts)
@@ -746,14 +747,14 @@ class FeishuDistributor(BaseDistributor):
         
         if translated_dict.get("content"):
             t_text = translated_dict.get("content")
-            if len(t_text) > 1500: t_text = t_text[:1500] + "...\n[原文过长已截断]"
+            if len(t_text) > 800: t_text = t_text[:800] + "...\n[⬇️ 译文过长已截断]"
             lines.append(t_text)
             # 原文做对比
             if text and len(text) <= 80 and any(c.isalpha() or c.isdigit() for c in text):
                 clean_orig = text.strip().replace('\n', ' ')
                 lines.append(f"*( {clean_orig} )*")
         elif text:
-            if len(text) > 1500: text = text[:1500] + "...\n[原文过长已截断]"
+            if len(text) > 800: text = text[:800] + "...\n[⬇️ 正文过长已截断]"
             lines.append(text)
             
         if has_video:
@@ -772,11 +773,11 @@ class FeishuDistributor(BaseDistributor):
             
         if translated_dict.get("reference"):
             t_ref = translated_dict.get("reference")
-            if len(t_ref) > 1000: t_ref = t_ref[:1000] + "...\n[原文过长已截断]"
+            if len(t_ref) > 500: t_ref = t_ref[:500] + "...\n[⬇️ 译文过长已截断]"
             clean_ref = t_ref.replace('\n', '  ')
             lines.append(f"> *{clean_ref}*")
         elif ref_text:
-            if len(ref_text) > 1000: ref_text = ref_text[:1000] + "...\n[原文过长已截断]"
+            if len(ref_text) > 500: ref_text = ref_text[:500] + "...\n[⬇️ 原推过长已截断]"
             clean_ref = ref_text.replace('\n', '  ')
             lines.append(f"> *{clean_ref}*")
 

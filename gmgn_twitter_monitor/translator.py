@@ -33,10 +33,10 @@ async def translate_texts(texts_dict: dict[str, str]) -> dict[str, str] | None:
     if not valid_texts:
         return None
 
-    # 针对超长推文进行截断，限制投喂给大模型的字数
+    # 针对超长推文进行截断，平衡翻译延迟与上下文语义 (1000字符翻译耗时约2.8秒)
     for k, v in valid_texts.items():
-        if len(v) > 1500:
-            valid_texts[k] = v[:1500] + "...\n[原文过长已截断]"
+        if len(v) > 1000:
+            valid_texts[k] = v[:1000] + "...\n[⬇️ 原文过长已截断]"
 
     headers = {
         "Content-Type": "application/json",
