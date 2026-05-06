@@ -57,5 +57,49 @@ class TelegramRoutingTests(unittest.TestCase):
         )
 
 
+class CapturingTelegramDistributor(TelegramDistributor):
+    def __init__(self):
+        super().__init__(
+            bot_token="token",
+            main_channel_id="-100main",
+            enable_main=True,
+        )
+        self.last_endpoint = None
+        self.last_payload = None
+
+    async def _send_api(self, endpoint: str, payload: dict) -> dict | None:
+        self.last_endpoint = endpoint
+        self.last_payload = payload
+        return {"ok": True}
+
+
+class TelegramTranslationEditTests(unittest.IsolatedAsyncioTestCase):
+    async def test_translation_edit_keeps_original_text_before_translation(self):
+        distributor = CapturingTelegramDistributor()
+        message = {
+            "action": "tweet",
+            "author": {"handle": "cz_binance", "name": "CZ", "followers": None},
+            "content": {"text": "hello world", "media": []},
+            "reference": None,
+            "bio_change": None,
+        }
+
+        await distributor._translate_and_edit(
+            123,
+            "header without original text",
+            "🕒 推文时间: 2026-05-06 21:00:00",
+            message,
+            {"content": "你好，世界"},
+            "-100main",
+        )
+
+        self.assertEqual(distributor.last_endpoint, "editMessageText")
+        edited_text = distributor.last_payload["text"]
+        self.assertIn("hello world", edited_text)
+        self.assertIn("—— 🇨🇳 中文翻译 ——", edited_text)
+        self.assertIn("你好，世界", edited_text)
+        self.assertLess(edited_text.index("hello world"), edited_text.index("你好，世界"))
+
+
 if __name__ == "__main__":
     unittest.main()

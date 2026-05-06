@@ -230,7 +230,7 @@ class TelegramDistributor(BaseDistributor):
     async def _translate_and_edit(
         self,
         message_id: int,
-        header_no_text: str,
+        _header_no_text: str,
         footer: str,
         message: dict,
         translated_dict: dict[str, str],
@@ -260,30 +260,23 @@ class TelegramDistributor(BaseDistributor):
             logger.info(f"翻译结果与原文相同，跳过编辑: {target_channel_id}")
             return
 
-        def format_part(translated: str, original: str, is_ref: bool = False) -> str:
+        def format_part(translated: str, is_ref: bool = False) -> str:
             limit = 500 if is_ref else 800
             if len(translated) > limit:
                 translated = translated[:limit] + "...\n[⬇️ 译文过长已截断]"
-            escaped = self._escape_html(translated)
-
-            if original and len(original) <= 80 and original.strip() != translated.strip():
-                if any(c.isalpha() or c.isdigit() for c in original):
-                    orig_clean = original.strip().replace("\n", " ")
-                    escaped += f"\n(<i>{self._escape_html(orig_clean)}</i>)"
-            return escaped
+            return self._escape_html(translated)
 
         translated_html_parts = []
         if main_text or bio_text:
             translated_text = main_text if main_text else bio_text
-            original_text = text_parts.get("content", "") if main_text else text_parts.get("bio", "")
-            translated_html_parts.append(format_part(translated_text, original_text, is_ref=False))
+            translated_html_parts.append(format_part(translated_text, is_ref=False))
         if ref_text:
-            original_ref = text_parts.get("reference", "")
-            escaped_ref = format_part(ref_text, original_ref, is_ref=True)
+            escaped_ref = format_part(ref_text, is_ref=True)
             translated_html_parts.append(f"<blockquote>💬 原推翻译：\n{escaped_ref}</blockquote>")
 
+        original_html = self._format_message(message)
         translated_html = "\n\n".join(translated_html_parts)
-        new_text = f"{header_no_text}\n\n—— 🌐 中文翻译 ——\n{translated_html}\n\n{footer}"
+        new_text = f"{original_html}\n\n—— 🇨🇳 中文翻译 ——\n{translated_html}\n\n{footer}"
 
         payload = {
             "chat_id": target_channel_id,

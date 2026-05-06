@@ -151,7 +151,66 @@ journalctl -u gmgn-twitter-monitor.service -f -o cat
 
 `ctl.py` 在 root 用户下会直接调用 `systemctl` / `journalctl`，非 root 用户下会自动加 `sudo`。
 
-## 5. 可选 WARP 代理
+## 5. 更新已有部署
+
+如果服务器上正在运行旧版本，按下面步骤更新。`.env` 和 `browser_data/` 已被 `.gitignore` 排除，正常拉取代码不会覆盖你的配置和登录态。
+
+```bash
+cd /root/GmgnTwitterTgAlert
+
+# 先停止正在运行的服务
+systemctl stop gmgn-twitter-monitor.service
+
+# 查看是否有本地改动
+git status --short
+```
+
+如果 `git status --short` 没有输出，直接拉取：
+
+```bash
+git pull --ff-only
+```
+
+如果服务器上临时改过文件，先暂存再拉取：
+
+```bash
+git stash push -u -m "server local changes before update"
+git pull --ff-only
+```
+
+更新依赖并刷新 systemd：
+
+```bash
+/root/.local/bin/uv pip install -r requirements.txt
+systemctl daemon-reload
+```
+
+启动前做一次不启动服务的校验：
+
+```bash
+/root/.local/bin/uv run python -m compileall -q gmgn_twitter_monitor gmgn_twitter_monitor.py ctl.py test_socks.py tests
+/root/.local/bin/uv run python -m unittest discover -s tests -v
+```
+
+确认 `.env` 中首次登录开关已经关闭，再启动服务：
+
+```env
+FIRST_RUN_LOGIN=False
+```
+
+```bash
+systemctl start gmgn-twitter-monitor.service
+journalctl -u gmgn-twitter-monitor.service -f -o cat
+```
+
+如果这次更新包含 `gmgn-twitter-monitor.service` 的路径或启动命令变更，建议重新注册服务文件：
+
+```bash
+install -m 0644 gmgn-twitter-monitor.service /etc/systemd/system/gmgn-twitter-monitor.service
+systemctl daemon-reload
+```
+
+## 6. 可选 WARP 代理
 
 默认情况下程序直连。只有当 `.env` 中设置 `PROXY_SERVER` 时，浏览器和 DeepSeek 请求才会走代理。
 
@@ -182,7 +241,7 @@ PROXY_SERVER=socks5://127.0.0.1:40000
 
 Cloudflare 官方文档说明：Linux 初次连接需要 `warp-cli registration new` 和 `warp-cli connect`；本地代理模式只会代理显式配置为使用该本地 SOCKS/HTTPS 代理的应用。
 
-## 6. 本地校验
+## 7. 本地校验
 
 不要在 Windows 开发机启动服务。只做语法和单元测试：
 
