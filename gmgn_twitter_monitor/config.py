@@ -6,89 +6,64 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-FIRST_RUN_LOGIN = False
-AUTH_URL = "https://gmgn.ai/tglogin?user_id=53b06598-3e2b-4d2f-aec6-f2e5881def90&code=10355196-216d-4f12-bbf3-5407abb1eb6c&id=0eae54fb142533ac"
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("true", "1", "yes", "on")
+
+
+def _parse_handles(raw: str) -> list[str]:
+    return [
+        handle.strip().lower().lstrip("@")
+        for handle in raw.split(",")
+        if handle.strip()
+    ]
+
+
+FIRST_RUN_LOGIN = _env_bool("FIRST_RUN_LOGIN")
+AUTH_URL = os.getenv("AUTH_URL", "").strip()
 
 LOG_FILE = str(BASE_DIR / "twitter_monitor.log")
 USER_DATA_DIR = str(BASE_DIR / "browser_data")
 SCREENSHOT_PATH = str(BASE_DIR / "monitor_running.png")
 MONITOR_URL = "https://gmgn.ai/follow?target=xTracker&chain=bsc"
-PROXY_SERVER = "socks5://127.0.0.1:40000"
+PROXY_SERVER = os.getenv("PROXY_SERVER", "").strip()
 WATCHDOG_TIMEOUT = 120
 WATCHDOG_POLL_INTERVAL = 5
 XVFB_WIDTH = 1920
 XVFB_HEIGHT = 1080
 
-# ---------- WebSocket 分发配置 ----------
-WS_HOST = "0.0.0.0"
-WS_PORT = 8765
-WS_TOKEN = os.getenv("WS_TOKEN", "change-me-to-a-strong-token")
-WS_HEARTBEAT_INTERVAL = 30
+# ---------- Telegram delivery ----------
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "").strip()
+TG_ENABLE_MAIN = _env_bool("TG_ENABLE_MAIN")
+TG_MAIN_CHANNEL_ID = os.getenv("TG_MAIN_CHANNEL_ID", "").strip()
 
-# ---------- Telegram 推送配置 ----------
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
-TG_ENABLE_DEFAULT = os.getenv("TG_ENABLE_DEFAULT", "False").lower() in ("true", "1", "yes")
-TG_CHANNEL_ID = os.getenv("TG_CHANNEL_ID", "")
-
-# 动态解析路由分组
+# Dynamic route groups. Handles are not auto-added to TG_FILTER_HANDLES; the
+# filter is an explicit global allowlist only.
 TG_CHANNEL_MAP: dict[str, list[str]] = {}
-FEISHU_CHANNEL_MAP: dict[str, list[dict]] = {}
-_routing_handles = set()
 
-for k, v in os.environ.items():
-    if k.startswith("TG_ROUTING_") and v:
-        group_name = k[len("TG_ROUTING_"):]
-        handles = [h.strip().lower() for h in v.split(",") if h.strip()]
+for key, value in sorted(os.environ.items()):
+    if not key.startswith("TG_ROUTING_") or not value:
+        continue
 
-        # 解析 TG 路由
-        tg_enable_str = os.getenv(f"TG_ENABLE_{group_name}", "True").lower()
-        if tg_enable_str in ("true", "1", "yes"):
-            channel_id = os.getenv(f"TG_CHANNEL_ID_{group_name}")
-            if channel_id:
-                for h in handles:
-                    if h not in TG_CHANNEL_MAP:
-                        TG_CHANNEL_MAP[h] = []
-                    if channel_id not in TG_CHANNEL_MAP[h]:
-                        TG_CHANNEL_MAP[h].append(channel_id)
-                    _routing_handles.add(h)
-        
-        # 解析飞书路由 (共用 TG_ROUTING 的 handle 列表)
-        fs_enable_str = os.getenv(f"FEISHU_ENABLE_{group_name}", "True").lower()
-        if fs_enable_str in ("true", "1", "yes"):
-            fs_webhook = os.getenv(f"FEISHU_WEBHOOK_{group_name}")
-            fs_secret = os.getenv(f"FEISHU_SECRET_{group_name}", "")
-            if fs_webhook:
-                for h in handles:
-                    if h not in FEISHU_CHANNEL_MAP:
-                        FEISHU_CHANNEL_MAP[h] = []
-                    if not any(item['webhook'] == fs_webhook for item in FEISHU_CHANNEL_MAP[h]):
-                        FEISHU_CHANNEL_MAP[h].append({
-                            "webhook": fs_webhook,
-                            "secret": fs_secret
-                        })
-                _routing_handles.add(h)
+    group_name = key[len("TG_ROUTING_"):]
+    if not _env_bool(f"TG_ENABLE_{group_name}", True):
+        continue
 
-TG_FILTER_HANDLES = [
-    h.strip().lower()
-    for h in os.getenv("TG_FILTER_HANDLES", "").split(",")
-    if h.strip()
-]
-# 自动将启用路由组中的博主并入全局监控白名单
-if _routing_handles:
-    TG_FILTER_HANDLES = list(set(TG_FILTER_HANDLES) | _routing_handles)
+    channel_id = os.getenv(f"TG_CHANNEL_ID_{group_name}", "").strip()
+    if not channel_id:
+        continue
 
-# ---------- 飞书推送配置 ----------
-FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
-FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
-FEISHU_WEBHOOK_DEFAULT = os.getenv("FEISHU_WEBHOOK_DEFAULT", "")
-FEISHU_SECRET_DEFAULT = os.getenv("FEISHU_SECRET_DEFAULT", "")
-FEISHU_ENABLE_DEFAULT = os.getenv("FEISHU_ENABLE_DEFAULT", "False").lower() in ("true", "1", "yes")
+    for handle in _parse_handles(value):
+        TG_CHANNEL_MAP.setdefault(handle, [])
+        if channel_id not in TG_CHANNEL_MAP[handle]:
+            TG_CHANNEL_MAP[handle].append(channel_id)
 
-# ---------- Webhook 推送配置 ----------
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+TG_FILTER_HANDLES = _parse_handles(os.getenv("TG_FILTER_HANDLES", ""))
 
-# ---------- DeepSeek 翻译配置 ----------
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+# ---------- DeepSeek translation ----------
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"

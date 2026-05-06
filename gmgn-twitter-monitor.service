@@ -4,11 +4,11 @@ After=network.target
 
 [Service]
 Type=simple
-User=ubuntu
-Group=ubuntu
-WorkingDirectory=/home/ubuntu/workspace/GmgnTwitterClaw
-Environment="PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=/home/ubuntu/.local/bin/uv run python gmgn_twitter_monitor.py
+User=root
+Group=root
+WorkingDirectory=/root/GmgnTwitterTgAlert
+Environment="PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/root/.local/bin/uv run python -m gmgn_twitter_monitor
 Restart=always
 RestartSec=10
 RuntimeMaxSec=43200

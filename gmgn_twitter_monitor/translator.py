@@ -59,9 +59,11 @@ async def translate_texts(texts_dict: dict[str, str]) -> dict[str, str] | None:
         try:
             timeout = aiohttp.ClientTimeout(total=45)
             
-            proxy_url = getattr(config, "PROXY_SERVER", "socks5://127.0.0.1:40000")
-            from aiohttp_socks import ProxyConnector
-            connector = ProxyConnector.from_url(proxy_url, rdns=True) if proxy_url else None
+            proxy_url = getattr(config, "PROXY_SERVER", "")
+            connector = None
+            if proxy_url:
+                from aiohttp_socks import ProxyConnector
+                connector = ProxyConnector.from_url(proxy_url, rdns=True)
             
             async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
                 async with session.post(

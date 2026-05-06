@@ -1,434 +1,196 @@
-# GmgnTwitterClaw 🦅
+# GmgnTwitterTgAlert
 
-**基于 GMGN.ai 的实时 Twitter KOL 监控引擎**，通过浏览器自动化拦截 WebSocket 数据流，将推特动态标准化后实时分发至 Telegram 频道、WebSocket 广播和 Webhook 三大通道。
+基于 GMGN.ai 的 Twitter/KOL 实时监控转发工具。当前 fork 已收窄为 **Telegram-only**：程序通过 Playwright 浏览器监听 GMGN 页面数据，将标准化后的消息发送到一个主群组，并按可选路由分组额外发送到指定 Telegram 群组或频道。
 
-### ✨ 核心特性
+## 当前特性
 
-- **全动作捕获**：覆盖发推、转推、回复、引用、关注/取关、删帖、换头像、改昵称、改简介、置顶/取消置顶共 12 种推特行为
-- **FxTwitter / vxTwitter 富文本卡片**：推文自动渲染为带图/视频的嵌入式预览卡片，关注/取关等主页类动作自动渲染为用户名片
-- **DeepSeek 实时翻译**：非阻塞异步翻译，推送完成后自动追加中文译文，零延迟不卡主循环
-- **多频道智能路由**：按推特 Handle 分组路由到不同 Telegram 频道，同一博主可同时推送至多个频道
-- **双轨数据捕获**：WebSocket 实时监听 + HTTP Polling 降级拦截，重连间隙零丢失
-- **去重引擎**：基于 `internal_id` 的快照/完整版智能去重，500ms 窗口内自动选优
-- **三通道扇出分发**：Telegram、WebSocket、Webhook 并行推送，任一通道故障不影响其余
-- **12 小时自动刷新**：systemd `RuntimeMaxSec` 定时重启，防止长时间运行导致浏览器内存泄漏
+- 捕获 GMGN 推送的发推、转推、回复、引用、关注/取关、删帖、换头像、改昵称、改简介、置顶/取消置顶等动作。
+- 主群组接收所有捕获到的消息。
+- 分组路由按 Twitter handle 匹配，同一条消息可以同时发往主群和多个分组。
+- Telegram 频道 ID 自动去重，避免同一目标收到重复消息。
+- DeepSeek 翻译可选，配置 API key 后会在 Telegram 消息发送后追加中文译文。
+- WARP 代理可选，默认直连；只有配置 `PROXY_SERVER` 时才走代理。
+- systemd 守护，默认 12 小时重启一次，降低长期浏览器运行带来的状态漂移。
 
----
+## 目录结构
 
-## 💡 FAQ：首次授权与账号准备必读
-
-在开始部署之前，你需要了解 GMGN 的底层授权机制：
-
-- **GMGN 官网**: [https://gmgn.ai/r/1RFSf1fc?chain=bsc](https://gmgn.ai/r/1RFSf1fc?chain=bsc)
-- **获取授权链接**: 首次使用时，你需要在 Telegram 中找到 GMGN Bot 提供的专属登录/授权链接（右键复制链接），并将其填入到本项目的配置文件 `config.py` 中的 `AUTH_URL` 里（详见下文第 5 步）。
-- **⚠️ 账号风控注意**: 强烈建议使用一个 **空 TG / 小号** 来扫码授权隔离风险。但请注意 GMGN 官方规则：对于没有任何交易量的纯空号，GMGN 会限制其关注小众博主（需要有交易量才能解锁）。相关限制规则请自行了解。
-- **📹 推特演示说明**: [点此查看视频说明演示](https://x.com/0xTechMelon/status/2049114161498726883?s=20)
-
----
-
-## 📂 项目结构
-
-```
-GmgnTwitterClaw/
+```text
+GmgnTwitterTgAlert/
 ├── gmgn_twitter_monitor/          # 核心包
-│   ├── __init__.py
-│   ├── __main__.py                # python -m 入口
-│   ├── app.py                     # 主循环：浏览器启动 + WS/Polling 双轨拦截 + 去重引擎
-│   ├── browser.py                 # Playwright 浏览器生命周期管理（启动/登录/截图/恢复）
-│   ├── config.py                  # 配置中心：从 .env 读取环境变量 + 路由分组解析
-│   ├── distributor.py             # 四大分发器：Logging / Telegram / WebSocket / Webhook
-│   ├── logging_setup.py           # loguru 日志格式化
-│   ├── models.py                  # StandardizedMessage 数据模型（dataclass）
-│   ├── parser.py                  # 原始 WS 数据 → 标准化 JSON 转换器
-│   ├── translator.py              # DeepSeek 异步翻译引擎
-│   └── watchdog.py                # 看门狗：超时无数据自动刷新页面
-├── gmgn_twitter_monitor.py        # 兼容入口（等价于 python -m gmgn_twitter_monitor）
-├── ctl.py                         # 交互式运维控制台（服务管理/日志查看/截图等）
-├── gmgn-twitter-monitor.service   # systemd 服务单元文件
-├── .env.example                   # 环境变量模板
-├── requirements.txt               # Python 依赖清单
-└── browser_data/                  # 浏览器登录态持久化目录（自动生成，勿删）
+│   ├── app.py                     # 主循环和浏览器监听
+│   ├── browser.py                 # Playwright 浏览器管理
+│   ├── config.py                  # .env 配置读取与 Telegram 路由解析
+│   ├── distributor.py             # Telegram 分发器
+│   ├── parser.py                  # GMGN 原始数据标准化
+│   ├── translator.py              # DeepSeek 翻译
+│   └── watchdog.py                # 无消息超时刷新
+├── scripts/
+│   ├── install_root_ubuntu.sh     # root/Ubuntu 部署脚本
+│   └── install_warp_proxy.sh      # 可选 WARP 本地代理脚本
+├── gmgn-twitter-monitor.service   # systemd service
+├── .env.example                   # 配置模板
+├── ctl.py                         # 服务控制台
+└── requirements.txt
 ```
 
----
+## 部署环境
 
-## 🚀 部署指南
+本 fork 默认部署方式：
 
-### 1. 安装基础依赖和 Python 工具 `uv`
+- Ubuntu / Debian-like Linux
+- 使用 `root` 用户
+- 项目路径：`/root/GmgnTwitterTgAlert`
+- 不在 Windows 环境运行服务；Windows 只用于代码校验
 
-`uv` 是比原生的 `pip` 快几百倍的现代化 Python 环境管理工具，本程序使用它来隔离虚拟环境。
+## 1. 克隆并安装
 
 ```bash
-# 安装 uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 使 uv 在当前终端立即生效
-source $HOME/.local/bin/env
-
-# 进入项目目录 (假设项目已经 clone 到了服务器的主目录下)
-cd ~/workspace/GmgnTwitterClaw
-
-# 创建独立虚拟环境并安装 requirements.txt 声明的 Python 库
-uv venv
-uv pip install -r requirements.txt
+cd /root
+git clone <your-fork-url> GmgnTwitterTgAlert
+cd /root/GmgnTwitterTgAlert
+bash scripts/install_root_ubuntu.sh
 ```
 
-### 2. 安装 Playwright 内核与 Linux 缺失的底层桌面包
+安装脚本会：
 
-因为程序的核心本质是操纵真的浏览器进行抓取，所以我们需要安装浏览器内核及在 Linux 裸机运行虚拟桌面所必须的 C 语言底层库。
+- 安装基础 apt 包和 `uv`
+- 创建/更新 `.venv`
+- 安装 Python 依赖
+- 安装 Playwright Chromium 和 Linux 运行依赖
+- 注册 systemd service 并执行 `systemctl daemon-reload`
 
-```bash
-# 下载 Chromium 浏览器内核
-uv run playwright install chromium
+脚本不会启动服务，也不会设置开机自启。这样可以避免 `.env` 或首次授权未准备好时误运行。
 
-# 一键安装 Linux 运行 Chrome 所必需的全套底层依赖 (例如 libatk, libgbm, libdrm 等，会自动调用 apt)
-sudo uv run playwright install-deps chromium
-```
-
-### 3. 设置 Cloudflare WARP 代理（突破 IP 盾防御核心）
-
-如果不配置这一步，机房 VPS 的 IP 访问 gmgn.ai 会被 Cloudflare 100% 出现盾阻断（"Sorry, you have been blocked"），甚至连验证码都不会给。通过挂载官方 WARP 服务，并将其转化为本地 Proxy，脚本将可以获得家庭宽带级别的隐身穿透能力。
+## 2. 配置 Telegram
 
 ```bash
-# 1. 注入 Cloudflare 的 GPG 密钥并添加官方 APT 源 (仅限 Ubuntu/Debian 系)
-curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
-
-# 2. 安装并注册 Warp 客户端
-sudo apt-get update
-sudo apt-get install -y cloudflare-warp
-
-warp-cli registration new
-# (中途如果遇到隐私提示，输入 Y 回车同意)
-
-# 3. 将 Warp 设定为本地 Socks5 代理模式，把端口绑定到 40000
-warp-cli mode proxy
-warp-cli proxy port 40000
-
-# 4. 连接
-warp-cli connect
-
-# 5. (可选) 测试代理是否通顺
-curl -x socks5://127.0.0.1:40000 https://cloudflare.com/cdn-cgi/trace
-# 如果输出的信息中有 warp=on 字眼，说明穿透成功。
-```
-
-### 4. 配置环境变量
-
-所有敏感信息通过 `.env` 文件管理，**严禁提交到 Git**（已在 `.gitignore` 中屏蔽）。
-
-```bash
-# 复制模板并填入真实值
 cp .env.example .env
 nano .env
 ```
 
-完整的环境变量说明：
-
-| 变量名 | 必填 | 说明 |
-|--------|:----:|------|
-| `WS_TOKEN` | ✅ | WebSocket 鉴权 Token，建议用 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` 生成 |
-| `TG_BOT_TOKEN` | ✅ | Telegram Bot API Token |
-| `FEISHU_APP_ID` | ❌ | 飞书企业自建应用 App ID (用于卡片原图提取与上传) |
-| `FEISHU_APP_SECRET` | ❌ | 飞书企业自建应用 App Secret |
-| `TG_ENABLE_DEFAULT` | ❌ | 默认频道推送开关（`True`/`False`），默认 `False` |
-| `TG_CHANNEL_ID` | ❌ | 默认/兜底频道 ID（未命中任何路由分组时使用） |
-| `TG_ENABLE_<GROUP>` | ❌ | 分组推送开关，如 `TG_ENABLE_BINANCE=True` |
-| `TG_CHANNEL_ID_<GROUP>` | ❌ | 分组目标频道 ID，如 `TG_CHANNEL_ID_BINANCE=-100xxx` |
-| `TG_ROUTING_<GROUP>` | ❌ | 分组内的推特 Handle 列表（逗号分隔），如 `TG_ROUTING_BINANCE=cz_binance` |
-| `TG_FILTER_HANDLES` | ❌ | 附加白名单（一般留空，路由分组的 Handle 会自动合并） |
-| `DEEPSEEK_API_KEY` | ❌ | DeepSeek API Key，留空则跳过翻译 |
-| `WEBHOOK_URL` | ❌ | Webhook 推送目标 URL，留空则禁用 |
-| `WEBHOOK_SECRET` | ❌ | HMAC-SHA256 签名密钥 |
-
-#### 多频道路由分组规则
-
-每个路由分组需要定义**一致的后缀**（例如后缀为 `BINANCE`）：
+核心配置：
 
 ```env
-# TG 频道配置
-TG_ENABLE_BINANCE=True                              # 开关
-TG_CHANNEL_ID_BINANCE=-1001234567891                 # 目标频道
-TG_ROUTING_BINANCE=cz_binance,heyibinance            # 博主列表
+FIRST_RUN_LOGIN=False
+AUTH_URL=
+PROXY_SERVER=
 
-# 飞书群聊配置 (支持原生提取大图渲染)
-FEISHU_ENABLE_BINANCE=True                           # 飞书开关
-FEISHU_WEBHOOK_BINANCE=https://open.feishu.cn/...    # 飞书群自定义机器人 Webhook
-FEISHU_SECRET_BINANCE=your-secret                    # 飞书安全签名密钥
+TG_BOT_TOKEN=123456789:your-token
+
+TG_ENABLE_MAIN=True
+TG_MAIN_CHANNEL_ID=-1001234567890
+
+TG_ROUTING_BINANCE=cz_binance,heyibinance
+TG_ENABLE_BINANCE=True
+TG_CHANNEL_ID_BINANCE=-1001234567891
+
+TG_FILTER_HANDLES=
+DEEPSEEK_API_KEY=
 ```
 
-- 同一个 Handle 可以出现在多个分组中，会同时推送到所有匹配的频道
-- `TG_FILTER_HANDLES` 无需手动填写路由分组里的 Handle，系统会自动合并
+配置语义：
 
-### 飞书群组配置与避坑指南
+- `TG_ENABLE_MAIN=True` 且 `TG_MAIN_CHANNEL_ID` 有值时，主群接收所有捕获消息。
+- `TG_ROUTING_<GROUP>` 中的 handle 命中后，会额外发送到 `TG_CHANNEL_ID_<GROUP>`。
+- 同一个 handle 可以放进多个分组。
+- 如果分组频道 ID 与主群相同，程序只会发送一次。
+- `TG_FILTER_HANDLES` 默认为空，表示不过滤；一旦填写，它就是全局白名单，未列入的 handle 连主群也不会收到。
 
-为了实现类似 Telegram Channel 的**纯净只读情报群**体验，并且避开企业内网的权限墙，请严格遵循以下配置指南：
+## 3. 首次 GMGN 授权
 
-1. **创建外部群聊（强烈建议）**：在飞书创建群聊时，**务必选择创建“外部群聊”**。如果你创建的是企业内部群，自定义机器人可能会受限于企业组织架构的安全策略而无法正常发言或被外部人员查看。
-2. **添加机器人**：在飞书群设置的“群机器人”中添加“自定义机器人”，获取 Webhook URL 和安全签名 Secret 填入 `.env` 中对应的分组。
-3. **开启全员禁言**：进入群设置 -> 群管理 -> 谁可以在此群发言，将其修改为 **“仅群主和群管理员”**。
-4. **安全与纯净加固**（可选）：将群管理中的“谁可以@所有人”、“发起视频会议”、“Pin”、“编辑群信息”等也全部改为 **“仅群主和群管理员”**。
+首次部署需要写入浏览器登录态：
 
-**原理解析：**
-经过实测，由群主（或管理员）创建的**自定义 Webhook 机器人**默认继承高级权限，能够无视“仅群主和群管理员可发言”的全局禁言锁，继续向群内顺畅推送情报，而普通群员则完全无法打字发言。
+1. 在 Telegram 中从 GMGN Bot 获取未过期的授权链接。
+2. 在 `.env` 中设置：
 
-**避坑：原生大图与服务器网络配置**
-为了弥补飞书不支持直接渲染外部图片链接的缺陷，本系统在底层设计了独特的**双线程并发机制**：
-1. **借尸还魂**：利用 `.env` 中的 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`（该应用需在飞书开发者后台开通 `im:resource:upload` 获取与上传图片或文件权限并发布新版本），将 Twitter 的外网原图（包括视频的封面）极速下载并以应用的身份上传给飞书，获取合法内网 `img_key`。
-2. **瞒天过海**：与此同时，并发调用 DeepSeek 获取中文翻译。当两路异步任务瞬间完成后，系统会将带有内网图片的精美卡片，依然使用能穿透禁言的 Webhook 机器人发送。
+```env
+FIRST_RUN_LOGIN=True
+AUTH_URL=https://gmgn.ai/tglogin?...
+```
 
-> **⚠️ 网络代理避坑警告 (非常重要)**: 
-> 飞书上传大图的前提是：系统能够成功下载推特的原图（pbs.twimg.com）。
-> - **如果你的服务器在海外（如 AWS 东京/美国节点）**：程序会自动直连，千万不要在环境变量中乱配 `http_proxy` 或在系统中开启没用的本地翻墙代理端口，否则会导致下载图片请求超时失败，最终导致飞书卡片渲染不出任何图片和视频封面（变成干瘪的纯文字或空卡片）。
-> - **如果你的服务器在国内**：必须正确配置并导出全局的 `http_proxy` / `https_proxy` 环境变量（如 `export http_proxy=http://127.0.0.1:7890`），程序会自动读取并走代理通道下载原图。
-
-
-
-### 5. 首次运行与授权
-
-当你的新服务器第一次打算跑脚本时，你需要让程序获得你具体的身份登录状态。
-
-1. 修改 `gmgn_twitter_monitor/config.py`，将 `FIRST_RUN_LOGIN` 改为 `True`。
-2. 在同一个文件里，将 `AUTH_URL` 赋值为你最新的（未过期）授权链接 `https://gmgn.ai/tglogin?...&id=...`。
-3. 执行监控脚本：
+3. 手动运行一次：
 
 ```bash
-uv run python -m gmgn_twitter_monitor
+/root/.local/bin/uv run python -m gmgn_twitter_monitor
 ```
 
-> 该程序会自动利用 `xvfbwrapper` 在后台开启隐形的虚拟桌面，使用有头模式（突破 CF 封锁）访问该授权页面，并等候 8 秒将登录凭证序列化写入当前目录下的 `./browser_data` 文件夹。此后它会自动关闭可能会弹出的弹窗，切换到【我的】标签进行监听。
->
-> 兼容方式仍然保留：如果你已有旧脚本依赖，也可以继续执行 `uv run python gmgn_twitter_monitor.py`。
+看到浏览器状态写入成功后停止程序，然后把 `.env` 改回：
 
-**【重要】**
-一旦第一次看到日志输出获取成功，为了加速以后重启的流程，建议你回去把 `gmgn_twitter_monitor/config.py` 里的 `FIRST_RUN_LOGIN` 重新改回 `False`。只要 `browser_data` 文件夹不被删，服务器就可以在接下来的很长一段时间内复用该状态免密直接连接。
+```env
+FIRST_RUN_LOGIN=False
+```
 
-### 6. systemd 服务自动守护
+只要 `browser_data/` 不被删除，后续 systemd 服务会复用登录态。
+
+## 4. 启动与运维
+
+手动启动：
 
 ```bash
-# 将 service 文件链接到 systemd 目录
-sudo ln -sf $(pwd)/gmgn-twitter-monitor.service /etc/systemd/system/
-sudo systemctl daemon-reload
-
-# 开机自启 + 立即启动
-sudo systemctl enable gmgn-twitter-monitor.service
-sudo systemctl start gmgn-twitter-monitor.service
-
-# 查看运行状态
-sudo systemctl status gmgn-twitter-monitor.service
-
-# 查看实时日志
-sudo journalctl -u gmgn-twitter-monitor -f
+systemctl start gmgn-twitter-monitor.service
 ```
 
-**服务守护策略：**
-- 崩溃后 **10 秒**自动重启（`RestartSec=10`）
-- 每 **12 小时**自动重启一次（`RuntimeMaxSec=43200`），防止浏览器长时间运行导致内存泄漏或 WebSocket 老化
-- 启动日志会打印当前启动时间和下次预计重启时间
-
-### 7. Nginx + TLS 配置（WSS）
-
-如果在新服务器上需要重新配置 WSS：
+设置开机自启：
 
 ```bash
-# 安装 Nginx 和 Certbot
-sudo apt-get install -y nginx certbot python3-certbot-nginx
-
-# 创建站点配置（参考 /etc/nginx/sites-available/your-domain.com）
-# 启用站点
-sudo ln -sf /etc/nginx/sites-available/your-domain.com /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default
-
-# 申请 SSL 证书（自动注入 Nginx 配置）
-sudo certbot --nginx -d your-domain.com --non-interactive --agree-tos --email your@email.com --redirect
-
-# 测试配置
-sudo nginx -t && sudo systemctl reload nginx
+systemctl enable gmgn-twitter-monitor.service
 ```
 
-证书由 Certbot 的 systemd timer 自动续期，无需手动干预。
+查看状态与日志：
 
----
-
-## 🏗️ 系统架构
-
-### 四通道分发架构
-
-```
-   gmgn.ai WebSocket / HTTP Polling
-              │
-              ▼
-   ┌─────────────────────┐
-   │  Parser 标准化 JSON   │ ← 12 种 Twitter 动作全解析
-   └──────────┬──────────┘
-              │
-    MessageDeduplicator      ← 500ms 窗口智能去重
-              │
-    DistributorHub.publish()
-     ┌────────┼────────┬──────────┐
-     │        │        │          │
-┌────▼───┐ ┌──▼────┐ ┌─▼──────┐ ┌─▼───────┐
-│Logging │ │  TG   │ │Webhook │ │  WSS    │
-│ 日志   │ │ 频道  │ │HTTP POST│ │ 广播   │
-│        │ │ 多频道│ │HMAC签名│ │Token鉴权│
-│        │ │ 路由  │ │        │ │         │
-└────────┘ └──┬────┘ └────────┘ └─────────┘
-              │
-        DeepSeek 异步翻译
-       (推送后追加译文)
+```bash
+systemctl status gmgn-twitter-monitor.service --no-pager -l
+journalctl -u gmgn-twitter-monitor.service -f -o cat
 ```
 
-### Telegram 推送特性
+也可以使用控制台：
 
-- **FxTwitter 推文卡片**：发推、转推、回复、引用等动作自动通过 `fxtwitter.com` 渲染为带图/视频的嵌入式预览
-- **vxTwitter 主页名片**：关注、取关、改昵称、改简介等动作自动通过 `vxtwitter.com` 渲染为用户头像+简介的名片卡
-- **换头像对比图**：头像变更动作保留原生 `sendMediaGroup`，展示新旧头像的并列对比
-- **DeepSeek 实时翻译**：推文发送后异步调用 DeepSeek API 翻译，翻译完成后自动编辑原消息追加中文译文，主推送流程零阻塞
-- **429 退避重试**：遇到 Telegram Rate Limit 时自动等待并重试
-
----
-
-## 📡 推送数据格式（标准化 JSON）
-
-每条消息对应一个 Twitter 动作，三大通道（Telegram/WebSocket/Webhook）使用完全一致的 JSON 结构：
-
-```json
-{
-  "action": "tweet",
-  "original_action": null,
-  "tweet_id": "1234567890123456789",
-  "internal_id": "abc123def456",
-  "timestamp": 1712300000,
-  "author": {
-    "handle": "cz_binance",
-    "name": "CZ 🔶 BNB",
-    "avatar": "https://pbs.twimg.com/profile_images/xxx/photo.jpg",
-    "followers": 12800000,
-    "tags": ["Smart_kol"]
-  },
-  "content": {
-    "text": "推文正文内容...",
-    "media": [
-      { "type": "photo", "url": "https://pbs.twimg.com/media/xxx.jpg" }
-    ]
-  },
-  "reference": {
-    "tweet_id": "9876543210",
-    "author_handle": "elonmusk",
-    "author_name": "Elon Musk",
-    "author_avatar": "https://pbs.twimg.com/...",
-    "author_followers": 239600000,
-    "text": "被引用/回复/转推的原文...",
-    "media": [],
-    "type": "quoted"
-  },
-  "unfollow_target": null,
-  "avatar_change": null,
-  "bio_change": null
-}
+```bash
+/root/.local/bin/uv run python ctl.py
 ```
 
-### `action` 字段枚举（共 12 种）
+`ctl.py` 在 root 用户下会直接调用 `systemctl` / `journalctl`，非 root 用户下会自动加 `sudo`。
 
-| 值 | 含义 | 说明 |
-|----|------|------|
-| `tweet` | 发布新推文 | 原创推文，`content.text` 有正文 |
-| `repost` | 转推（RT） | `reference` 包含被转推的原推信息 |
-| `reply` | 回复 | `reference` 包含被回复的原推信息 |
-| `quote` | 引用推文 | `content.text` 有引用评论，`reference` 有原推 |
-| `follow` | 新增关注 | `unfollow_target` 包含被关注者信息 |
-| `unfollow` | 取消关注 | `unfollow_target` 包含被取关者信息 |
-| `delete_post` | 删除推文 | `original_action` 记录被删推文的原始类型 |
-| `photo` | 更换头像 | `avatar_change` 包含 `before`/`after` 头像 URL |
-| `description` | 简介更新 | `bio_change` 包含 `before`/`after` 简介文本 |
-| `name` | 更改昵称 | 作者信息中包含新昵称 |
-| `pin` | 置顶推文 | `tweet_id` 包含被置顶的推文 ID |
-| `unpin` | 取消置顶 | `tweet_id` 包含被取消置顶的推文 ID |
+## 5. 可选 WARP 代理
 
-### 条件字段说明
+默认情况下程序直连。只有当 `.env` 中设置 `PROXY_SERVER` 时，浏览器和 DeepSeek 请求才会走代理。
 
-| 字段 | 出现条件 |
-|------|----------|
-| `reference` | `repost` / `reply` / `quote` / `delete_post` |
-| `unfollow_target` | `follow` / `unfollow` |
-| `avatar_change` | `photo` |
-| `bio_change` | `description` |
-| `original_action` | `delete_post` |
+安装 Cloudflare WARP 本地代理：
 
----
-
-## 🔌 WSS 客户端接入示例
-
-```python
-import asyncio
-import json
-
-import websockets
-from loguru import logger
-
-WS_URL = "wss://your-domain.com/ws"
-TOKEN  = "your-ws-token"  # 与 .env 中 WS_TOKEN 一致
-
-async def handle_signal(msg: dict):
-    action = msg["action"]
-    handle = msg["author"]["handle"]
-    text   = msg["content"]["text"] or ""
-    logger.info(f"[{action}] @{handle}: {text[:80]}")
-
-async def listen_forever():
-    while True:
-        try:
-            async with websockets.connect(WS_URL) as ws:
-                await ws.send(json.dumps({"token": TOKEN}))
-                resp = json.loads(await ws.recv())
-                assert resp.get("status") == "connected", f"鉴权失败: {resp}"
-                logger.success("✅ 已连接，开始接收信号...")
-                async for raw in ws:
-                    await handle_signal(json.loads(raw))
-        except (websockets.exceptions.ConnectionClosed,
-                OSError, asyncio.TimeoutError) as e:
-            logger.warning(f"⚠️ 连接断开: {e}，5秒后重连...")
-            await asyncio.sleep(5)
-
-if __name__ == "__main__":
-    asyncio.run(listen_forever())
+```bash
+cd /root/GmgnTwitterTgAlert
+bash scripts/install_warp_proxy.sh
 ```
 
-### Webhook 签名验证示例
+脚本会安装 Cloudflare WARP，将其配置为本地代理模式并测试：
 
-```python
-import hmac
-import hashlib
-
-def verify_signature(body: bytes, secret: str, received_signature: str) -> bool:
-    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, received_signature)
-
-# 在你的接收端：
-# signature = request.headers.get("X-Signature-SHA256")
-# is_valid = verify_signature(request.body, "your-secret", signature)
+```text
+socks5://127.0.0.1:40000
 ```
 
----
+启用代理：
 
-## 📋 配置速查
+```env
+PROXY_SERVER=socks5://127.0.0.1:40000
+```
 
-| 配置项 | 值 |
-|--------|-----|
-| WSS 地址 | `wss://your-domain.com/ws` |
-| 鉴权 Token | `.env → WS_TOKEN` |
-| TG 推送 | `.env → TG_BOT_TOKEN` + 路由分组变量 |
-| 翻译 | `.env → DEEPSEEK_API_KEY` |
-| Webhook | `.env → WEBHOOK_URL` |
-| 心跳间隔 | 30 秒 |
-| 看门狗超时 | 120 秒（无消息自动刷新页面） |
-| 服务自动重启 | 每 12 小时（`RuntimeMaxSec=43200`） |
-| 监控目标 | `gmgn.ai/follow?target=xTracker&chain=bsc` |
-| WARP 代理 | `socks5://127.0.0.1:40000` |
-| SSL 证书 | Let's Encrypt，Certbot 自动续期 |
+测试当前 `.env` 中配置的代理：
 
----
+```bash
+/root/.local/bin/uv run python test_socks.py
+```
 
-## 📜 License
+Cloudflare 官方文档说明：Linux 初次连接需要 `warp-cli registration new` 和 `warp-cli connect`；本地代理模式只会代理显式配置为使用该本地 SOCKS/HTTPS 代理的应用。
+
+## 6. 本地校验
+
+不要在 Windows 开发机启动服务。只做语法和单元测试：
+
+```bash
+uv run python -m compileall -q gmgn_twitter_monitor gmgn_twitter_monitor.py ctl.py
+uv run python -m unittest discover -s tests -v
+```
+
+## License
 
 MIT

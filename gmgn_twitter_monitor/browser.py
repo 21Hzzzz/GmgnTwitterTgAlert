@@ -11,23 +11,31 @@ class BrowserManager:
 
     async def launch(self, playwright: Playwright) -> Page:
         logger.info(f"正在启动浏览器，使用持久化数据目录: {config.USER_DATA_DIR}")
-        self.context = await playwright.chromium.launch_persistent_context(
-            user_data_dir=config.USER_DATA_DIR,
-            headless=False,
-            proxy={"server": config.PROXY_SERVER},
-            args=[
+        launch_options = {
+            "user_data_dir": config.USER_DATA_DIR,
+            "headless": False,
+            "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
                 "--window-size=1920,1080",
                 "--start-maximized",
             ],
-        )
+        }
+        if config.PROXY_SERVER:
+            launch_options["proxy"] = {"server": config.PROXY_SERVER}
+            logger.info(f"浏览器代理已启用: {config.PROXY_SERVER}")
+        else:
+            logger.info("浏览器代理未配置，将直连访问")
+
+        self.context = await playwright.chromium.launch_persistent_context(**launch_options)
         self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
         return self.page
 
     async def run_first_login_if_needed(self):
         if not config.FIRST_RUN_LOGIN:
             return
+        if not config.AUTH_URL:
+            raise RuntimeError("FIRST_RUN_LOGIN=True 时必须在 .env 中配置 AUTH_URL")
 
         logger.info("检测到开启了首次运行登录模式，正在访问授权登录网页...")
         await self.page.goto(config.AUTH_URL, wait_until="networkidle")

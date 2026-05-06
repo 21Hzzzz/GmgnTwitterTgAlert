@@ -32,8 +32,19 @@ def dim(t: str) -> str:    return _c(2, t)
 
 # ──────────────────────────── 核心操作 ────────────────────────────
 
+def _is_root() -> bool:
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def _strip_sudo_for_root(cmd: list[str]) -> list[str]:
+    if _is_root() and cmd and cmd[0] == "sudo":
+        return cmd[1:]
+    return cmd
+
+
 def _run(cmd: list[str], *, replace: bool = False) -> int:
     """执行命令，replace=True 时用 os.execvp 替换当前进程（用于实时日志跟踪）。"""
+    cmd = _strip_sudo_for_root(cmd)
     if replace:
         print(dim("(按 Ctrl+C 退出日志跟踪)\n"))
         os.execvp(cmd[0], cmd)
@@ -123,8 +134,10 @@ def do_next_restart():
     try:
         # 获取服务激活时间戳
         result = subprocess.run(
-            ["sudo", "systemctl", "show", SERVICE_NAME,
-             "--property=ActiveEnterTimestamp", "--no-pager"],
+            _strip_sudo_for_root([
+                "sudo", "systemctl", "show", SERVICE_NAME,
+                "--property=ActiveEnterTimestamp", "--no-pager",
+            ]),
             capture_output=True, text=True, check=False,
         )
         raw = result.stdout.strip()
