@@ -284,4 +284,7 @@ async def main():
     finally:
         await hub.stop_all()
         await browser.close()
-        vdisplay.stop()
+        try:
+            vdisplay.stop()
+        except Exception as e:
+            logger.warning(f"Xvfb 关闭时发生清理错误，已忽略: {e}")

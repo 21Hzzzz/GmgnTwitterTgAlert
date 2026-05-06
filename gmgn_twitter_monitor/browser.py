@@ -1,4 +1,4 @@
-from playwright.async_api import BrowserContext, Page, Playwright
+from playwright.async_api import BrowserContext, Error as PlaywrightError, Page, Playwright
 from loguru import logger
 
 from . import config
@@ -38,14 +38,14 @@ class BrowserManager:
             raise RuntimeError("FIRST_RUN_LOGIN=True 时必须在 .env 中配置 AUTH_URL")
 
         logger.info("检测到开启了首次运行登录模式，正在访问授权登录网页...")
-        await self.page.goto(config.AUTH_URL, wait_until="networkidle")
-        logger.info("授权网页加载完成，正在等待 8 秒钟让网站将凭证写入本地缓存文件...")
-        await self.page.wait_for_timeout(8000)
+        await self.page.goto(config.AUTH_URL, wait_until="domcontentloaded", timeout=60000)
+        logger.info("授权网页 DOM 已加载，正在等待 15 秒钟让网站将凭证写入本地缓存文件...")
+        await self.page.wait_for_timeout(15000)
         logger.success("网站缓存吸录完毕！下一次启动可将 FIRST_RUN_LOGIN 改回 False。")
 
     async def goto_monitor_page(self):
         logger.info(f"正在跳转监控目标网站: {config.MONITOR_URL}")
-        await self.page.goto(config.MONITOR_URL, wait_until="networkidle")
+        await self.page.goto(config.MONITOR_URL, wait_until="domcontentloaded", timeout=60000)
         await self.page.wait_for_timeout(5000)
 
     async def handle_popups(self):
@@ -97,4 +97,10 @@ class BrowserManager:
 
     async def close(self):
         if self.context:
-            await self.context.close()
+            try:
+                await self.context.close()
+            except PlaywrightError as e:
+                logger.warning(f"浏览器上下文关闭时已不可用，跳过清理错误: {e}")
+            finally:
+                self.context = None
+                self.page = None
