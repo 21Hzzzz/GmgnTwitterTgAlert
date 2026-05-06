@@ -14,6 +14,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import List
 
 SERVICE_NAME = "gmgn-twitter-monitor.service"
 APP_LOG_FILE = Path(__file__).resolve().parent / "twitter_monitor.log"
@@ -33,16 +34,17 @@ def dim(t: str) -> str:    return _c(2, t)
 # ──────────────────────────── 核心操作 ────────────────────────────
 
 def _is_root() -> bool:
-    return hasattr(os, "geteuid") and os.geteuid() == 0
+    geteuid = getattr(os, "geteuid", None)
+    return callable(geteuid) and geteuid() == 0
 
 
-def _strip_sudo_for_root(cmd: list[str]) -> list[str]:
+def _strip_sudo_for_root(cmd: List[str]) -> List[str]:
     if _is_root() and cmd and cmd[0] == "sudo":
         return cmd[1:]
     return cmd
 
 
-def _run(cmd: list[str], *, replace: bool = False) -> int:
+def _run(cmd: List[str], *, replace: bool = False) -> int:
     """执行命令，replace=True 时用 os.execvp 替换当前进程（用于实时日志跟踪）。"""
     cmd = _strip_sudo_for_root(cmd)
     if replace:
@@ -110,7 +112,7 @@ def do_log_app():
         print(red(f"❌ 应用日志文件不存在: {APP_LOG_FILE}"))
         return
     try:
-        n = input(cyan(f"  输入要查看的行数 [默认 80]: ")).strip()
+        n = input(cyan("  输入要查看的行数 [默认 80]: ")).strip()
         n = int(n) if n else 80
     except ValueError:
         n = 80

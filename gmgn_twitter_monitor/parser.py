@@ -1,10 +1,10 @@
 import json
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from .models import Author, AvatarChange, BioChange, Content, Media, Reference, StandardizedMessage, UnfollowTarget
 
 
-def parse_socketio_payload(frame_data: Any) -> dict | None:
+def parse_socketio_payload(frame_data: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(frame_data, str):
         return None
 
@@ -22,7 +22,7 @@ def parse_socketio_payload(frame_data: Any) -> dict | None:
     if isinstance(parsed, str):
         parsed = json.loads(parsed)
 
-    if not parsed:
+    if not isinstance(parsed, dict):
         return None
 
     if parsed.get("channel") != "twitter_user_monitor_basic":
@@ -34,8 +34,8 @@ def parse_socketio_payload(frame_data: Any) -> dict | None:
     return parsed
 
 
-def extract_triggers_map(items: list[dict]) -> dict[str, str]:
-    triggers_map = {}
+def extract_triggers_map(items: List[Dict[str, Any]]) -> Dict[str, str]:
+    triggers_map: Dict[str, str] = {}
     for tweet_data in items:
         if not tweet_data:
             continue
@@ -49,14 +49,14 @@ def extract_triggers_map(items: list[dict]) -> dict[str, str]:
     return triggers_map
 
 
-def _build_media_list(raw_media: list | None) -> list[Media]:
+def _build_media_list(raw_media: Optional[List[Any]]) -> List[Media]:
     """从原始 m 数组构建 Media 列表。"""
     if not raw_media or not isinstance(raw_media, list):
         return []
     return [Media(type=m.get("t"), url=m.get("u")) for m in raw_media if isinstance(m, dict)]
 
 
-def _build_reference(item: dict, action_type: str) -> Reference | None:
+def _build_reference(item: Dict[str, Any], action_type: str) -> Optional[Reference]:
     """从 si/su/sc 字段构建引用信息。"""
     if "su" not in item:
         return None
@@ -84,7 +84,7 @@ def _build_reference(item: dict, action_type: str) -> Reference | None:
     )
 
 
-def _build_unfollow_target(item: dict) -> UnfollowTarget | None:
+def _build_unfollow_target(item: Dict[str, Any]) -> Optional[UnfollowTarget]:
     """从 f.f 字段构建取关目标信息（仅 unfollow 动作）。"""
     f_data = item.get("f")
     if not f_data or not isinstance(f_data, dict):
@@ -103,7 +103,7 @@ def _build_unfollow_target(item: dict) -> UnfollowTarget | None:
     )
 
 
-def _build_avatar_change(item: dict) -> AvatarChange | None:
+def _build_avatar_change(item: Dict[str, Any]) -> Optional[AvatarChange]:
     """从 p 字段构建头像变更信息（仅 photo 动作）。"""
     p_data = item.get("p")
     if not p_data or not isinstance(p_data, dict):
@@ -115,7 +115,7 @@ def _build_avatar_change(item: dict) -> AvatarChange | None:
     )
 
 
-def _build_bio_change(item: dict) -> BioChange | None:
+def _build_bio_change(item: Dict[str, Any]) -> Optional[BioChange]:
     """从 p 字段构建简介变更信息（仅 description 动作）。"""
     p_data = item.get("p")
     if not p_data or not isinstance(p_data, dict):
@@ -127,7 +127,7 @@ def _build_bio_change(item: dict) -> BioChange | None:
     )
 
 
-def build_standardized_message(item: dict) -> StandardizedMessage:
+def build_standardized_message(item: Dict[str, Any]) -> StandardizedMessage:
     action_type = item.get("tw", "unknown")
 
     # 用户信息
