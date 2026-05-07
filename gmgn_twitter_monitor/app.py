@@ -150,11 +150,11 @@ async def first_login(auth_url: str) -> None:
     setup_logging()
     auth_url = auth_url.strip()
     if not auth_url:
-        raise RuntimeError("first-login requires a GMGN authorization URL")
+        raise RuntimeError("首次登录需要提供 GMGN 授权 URL")
     if Xvfb is None:
         raise RuntimeError(
-            "xvfbwrapper is required to run the first-login flow on Linux. "
-            "Install dependencies with scripts/install_root_ubuntu.sh."
+            "Linux 首次登录流程需要 xvfbwrapper。"
+            "请先通过 scripts/install_root_ubuntu.sh 安装依赖。"
         ) from XVFB_IMPORT_ERROR
 
     vdisplay = Xvfb(width=config.XVFB_WIDTH, height=config.XVFB_HEIGHT)
@@ -170,15 +170,15 @@ async def first_login(auth_url: str) -> None:
         try:
             vdisplay.stop()
         except Exception as e:
-            logger.warning(f"Xvfb cleanup failed during first-login, ignored: {e}")
+            logger.warning(f"首次登录结束时清理 Xvfb 失败，已忽略: {e}")
 
 
 async def main():
     setup_logging()
     if Xvfb is None:
         raise RuntimeError(
-            "xvfbwrapper is required to run the monitor on Linux. "
-            "Install dependencies with scripts/install_root_ubuntu.sh."
+            "Linux 监控服务需要 xvfbwrapper。"
+            "请先通过 scripts/install_root_ubuntu.sh 安装依赖。"
         ) from XVFB_IMPORT_ERROR
 
     _cleanup_orphan_processes()

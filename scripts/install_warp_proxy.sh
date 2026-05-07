@@ -4,23 +4,23 @@ set -euo pipefail
 PROXY_PORT="${WARP_PROXY_PORT:-40000}"
 
 if [[ "$(id -u)" -ne 0 ]]; then
-  echo "This installer must be run as root."
+  echo "请使用 root 用户运行 WARP 安装脚本。"
   exit 1
 fi
 
 if [[ ! -r /etc/os-release ]]; then
-  echo "Cannot detect Linux distribution: /etc/os-release is missing."
+  echo "无法检测 Linux 发行版：缺少 /etc/os-release。"
   exit 1
 fi
 
 # shellcheck disable=SC1091
 source /etc/os-release
 if [[ "${ID:-}" != "ubuntu" ]]; then
-  echo "This installer is intended for Ubuntu."
+  echo "此 WARP 安装脚本仅支持 Ubuntu。"
   exit 1
 fi
 
-echo "Installing Cloudflare WARP..."
+echo "正在安装 Cloudflare WARP..."
 apt-get update
 apt-get install -y ca-certificates curl gnupg lsb-release
 
@@ -34,23 +34,23 @@ apt-get update
 apt-get install -y cloudflare-warp
 systemctl enable --now warp-svc
 
-echo "Registering WARP client if needed..."
+echo "正在注册 WARP 客户端（如已注册会跳过）..."
 if ! warp-cli registration show >/dev/null 2>&1; then
   warp-cli --accept-tos registration new || warp-cli --accept-tos register
 fi
 
-echo "Switching WARP to local proxy mode on port ${PROXY_PORT}..."
+echo "正在切换 WARP 到本地代理模式，端口：${PROXY_PORT}..."
 warp-cli mode proxy || warp-cli set-mode proxy
 warp-cli proxy port "$PROXY_PORT" || warp-cli set-proxy-port "$PROXY_PORT"
 warp-cli connect
 
-echo "Testing local WARP proxy..."
+echo "正在测试本地 WARP 代理..."
 curl --proxy "socks5h://127.0.0.1:${PROXY_PORT}" https://www.cloudflare.com/cdn-cgi/trace
 
 cat <<EOF
 
-WARP proxy setup finished.
+WARP 本地代理安装完成。
 
-To use it for this project, set this in /root/GmgnTwitterTgAlert/.env:
+如需让本项目使用该代理，请在 /root/GmgnTwitterTgAlert/.env 中设置：
   PROXY_SERVER=socks5://127.0.0.1:${PROXY_PORT}
 EOF

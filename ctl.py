@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Command-line controller installed as `gta` on the server."""
+"""安装到服务器上的 gta 中文服务控制命令。"""
 
 from __future__ import annotations
 
@@ -80,8 +80,8 @@ def _capture(cmd: list[str], *, cwd: Path | None = None) -> subprocess.Completed
 
 def _require_project() -> bool:
     if not PROJECT_DIR.exists():
-        print(f"Project directory not found: {PROJECT_DIR}")
-        print("Run the one-line installer first.")
+        print(f"未找到项目目录：{PROJECT_DIR}")
+        print("请先运行一键部署脚本。")
         return False
     return True
 
@@ -89,10 +89,10 @@ def _require_project() -> bool:
 def _require_env() -> bool:
     if ENV_FILE.exists():
         return True
-    print(f"Missing config file: {ENV_FILE}")
+    print(f"未找到配置文件：{ENV_FILE}")
     if ENV_EXAMPLE.exists():
-        print(f"Create it with: cp {ENV_EXAMPLE} {ENV_FILE}")
-    print("Edit .env manually before starting the service.")
+        print(f"可先复制模板：cp {ENV_EXAMPLE} {ENV_FILE}")
+    print("请手动编辑 .env 后再启动服务。")
     return False
 
 
@@ -103,17 +103,17 @@ def _service_is_active() -> bool:
 
 def _ask_first_login() -> bool:
     if not sys.stdin.isatty():
-        print("Non-interactive start detected; skipping first-login prompt.")
+        print("检测到非交互式启动，跳过首次登录询问。")
         return False
 
-    answer = input("Run first-login authorization before starting? [y/N]: ").strip().lower()
+    answer = input("启动前是否先执行首次 GMGN 授权登录？[y/N]: ").strip().lower()
     return answer in {"y", "yes"}
 
 
 def _run_first_login() -> bool:
-    auth_url = input("Paste GMGN authorization URL: ").strip()
+    auth_url = input("请粘贴 GMGN 授权 URL：").strip()
     if not auth_url:
-        print("Authorization URL is empty; aborting start.")
+        print("授权 URL 为空，已取消启动。")
         return False
 
     env = os.environ.copy()
@@ -124,7 +124,7 @@ def _run_first_login() -> bool:
         env=env,
     )
     if rc != 0:
-        print(f"first-login failed with exit code {rc}; service was not started.")
+        print(f"首次登录失败，退出码：{rc}。服务未启动。")
         return False
     return True
 
@@ -160,8 +160,9 @@ def _refresh_dependencies() -> int:
 def do_start() -> int:
     if not _require_project() or not _require_env():
         return 1
+    print("准备启动服务...")
     if _service_is_active():
-        print(f"{SERVICE_NAME} is already running.")
+        print(f"{SERVICE_NAME} 已在运行。")
         return _run(["systemctl", "status", SERVICE_NAME, "--no-pager", "-l"])
 
     if _ask_first_login() and not _run_first_login():
@@ -169,34 +170,39 @@ def do_start() -> int:
 
     rc = _run(["systemctl", "start", SERVICE_NAME])
     if rc == 0:
-        print(f"{SERVICE_NAME} started.")
+        print(f"{SERVICE_NAME} 已启动。")
         _run(["systemctl", "status", SERVICE_NAME, "--no-pager", "-l"])
     return rc
 
 
 def do_stop() -> int:
-    return _run(["systemctl", "stop", SERVICE_NAME])
+    print("正在停止服务...")
+    rc = _run(["systemctl", "stop", SERVICE_NAME])
+    if rc == 0:
+        print(f"{SERVICE_NAME} 已停止。")
+    return rc
 
 
 def do_restart() -> int:
     if not _require_project() or not _require_env():
         return 1
+    print("正在重启服务...")
     rc = _run(["systemctl", "restart", SERVICE_NAME])
     if rc == 0:
-        print(f"{SERVICE_NAME} restarted and reloaded .env.")
+        print(f"{SERVICE_NAME} 已重启，并已重新读取 .env。")
         _run(["systemctl", "status", SERVICE_NAME, "--no-pager", "-l"])
     return rc
 
 
 def do_status() -> int:
     status_rc = _run(["systemctl", "status", SERVICE_NAME, "--no-pager", "-l"])
-    print("\nFollowing live logs. Press Ctrl+C to exit.\n")
+    print("\n正在进入实时日志，按 Ctrl+C 退出。\n")
     _run(["journalctl", "-u", SERVICE_NAME, "-f", "--no-pager", "-o", "cat"], replace=True)
     return status_rc
 
 
 def do_log() -> int:
-    print("Following live logs. Press Ctrl+C to exit.\n")
+    print("正在进入实时日志，按 Ctrl+C 退出。\n")
     _run(["journalctl", "-u", SERVICE_NAME, "-f", "--no-pager", "-o", "cat"], replace=True)
     return 0
 
@@ -204,17 +210,18 @@ def do_log() -> int:
 def do_update() -> int:
     if not _require_project():
         return 1
+    print("开始更新项目代码和依赖...")
     if not (PROJECT_DIR / ".git").is_dir():
-        print(f"{PROJECT_DIR} is not a git repository; cannot update safely.")
+        print(f"{PROJECT_DIR} 不是 git 仓库，无法安全更新。")
         return 1
 
     dirty = _capture(["git", "status", "--porcelain", "--untracked-files=no"], cwd=PROJECT_DIR)
     if dirty.returncode != 0:
-        print(dirty.stderr.strip() or "git status failed")
+        print(dirty.stderr.strip() or "git status 执行失败")
         return dirty.returncode
     if dirty.stdout.strip():
-        print("Tracked local changes detected; update stopped.")
-        print("Commit, discard, or stash these changes manually, then run `gta update` again.")
+        print("检测到已跟踪文件存在本地改动，已停止更新。")
+        print("请手动提交、丢弃或暂存这些改动，然后重新运行 `gta update`。")
         print(dirty.stdout.strip())
         return 1
 
@@ -226,14 +233,15 @@ def do_update() -> int:
         return rc
     rc = _install_service_and_gta()
     if rc == 0:
-        print("Update complete. Service was not restarted; run `gta restart` when ready.")
+        print("更新完成。服务未自动重启；确认无误后请运行 `gta restart`。")
     return rc
 
 
 def do_warp() -> int:
     if not WARP_SCRIPT.exists():
-        print(f"WARP installer not found: {WARP_SCRIPT}")
+        print(f"未找到 WARP 安装脚本：{WARP_SCRIPT}")
         return 1
+    print("开始安装可选 WARP 本地代理...")
     return _run(["bash", str(WARP_SCRIPT)])
 
 
@@ -262,17 +270,17 @@ COMMANDS = {
 
 def print_help() -> None:
     print(
-        "Usage: gta <command>\n\n"
-        "Commands:\n"
-        "  start         Start service; optionally run first-login first\n"
-        "  stop          Stop service\n"
-        "  restart       Restart service and reload .env\n"
-        "  status        Show status, then follow live logs\n"
-        "  log|logs      Follow live logs\n"
-        "  update        Pull latest code and refresh dependencies; no restart\n"
-        "  warp          Install optional Cloudflare WARP local proxy\n"
-        "  enable        Enable service on boot\n"
-        "  disable       Disable service on boot\n"
+        "用法：gta <命令>\n\n"
+        "可用命令：\n"
+        "  start         启动服务；可选择先执行首次 GMGN 授权登录\n"
+        "  stop          停止服务\n"
+        "  restart       重启服务并重新读取 .env\n"
+        "  status        查看服务状态，然后进入实时日志\n"
+        "  log|logs      进入实时日志\n"
+        "  update        拉取最新代码并刷新依赖；不会自动重启\n"
+        "  warp          安装可选的 Cloudflare WARP 本地代理\n"
+        "  enable        设置开机自启\n"
+        "  disable       取消开机自启\n"
     )
 
 
@@ -284,7 +292,7 @@ def main() -> int:
     command = sys.argv[1].strip().lower()
     handler = COMMANDS.get(command)
     if not handler:
-        print(f"Unknown command: {command}\n")
+        print(f"未知命令：{command}\n")
         print_help()
         return 1
     return handler()

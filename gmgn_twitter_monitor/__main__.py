@@ -13,13 +13,13 @@ def cli() -> None:
             if not auth_url and len(sys.argv) > 2:
                 auth_url = sys.argv[2].strip()
             if not auth_url:
-                raise SystemExit("GMGN_LOGIN_URL is required for first-login")
+                raise SystemExit("执行 first-login 需要通过 GMGN_LOGIN_URL 提供授权 URL")
             asyncio.run(first_login(auth_url))
             return
         if command in ("help", "-h", "--help"):
-            print("Usage: python -m gmgn_twitter_monitor [first-login]")
+            print("用法：python -m gmgn_twitter_monitor [first-login]")
             return
-        raise SystemExit(f"Unknown command: {command}")
+        raise SystemExit(f"未知命令：{command}")
 
     asyncio.run(main())
 
