@@ -30,12 +30,16 @@ class TelegramDistributor(BaseDistributor):
     def __init__(
         self,
         bot_token: str,
-        main_channel_id: str,
+        default_channel_id: str = "",
+        enable_default: bool = False,
+        main_channel_id: str = "",
         enable_main: bool = False,
         channel_map: dict[str, list[str]] | None = None,
         filter_handles: list[str] | None = None,
     ):
         self.bot_token = bot_token
+        self.default_channel_id = default_channel_id
+        self.enable_default = enable_default
         self.main_channel_id = main_channel_id
         self.enable_main = enable_main
         self.channel_map = channel_map or {}
@@ -44,14 +48,18 @@ class TelegramDistributor(BaseDistributor):
         self._session: aiohttp.ClientSession | None = None
 
     async def start(self):
-        if not self.bot_token or (not self.main_channel_id and not self.channel_map):
+        has_default = self.enable_default and self.default_channel_id
+        has_main = self.enable_main and self.main_channel_id
+        has_routes = bool(self.channel_map)
+        if not self.bot_token or not (has_default or has_main or has_routes):
             logger.info("Telegram 分发器未配置 Token/Channel，已跳过启动")
             return
         self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
         filter_desc = ", ".join(self.filter_handles) if self.filter_handles else "全部"
         logger.success(
             "Telegram 分发器已启动 "
-            f"(主群开启: {self.enable_main}, 分组数: {len(self.channel_map)}, 过滤: {filter_desc})"
+            f"(默认群开启: {bool(has_default)}, 未路由主群开启: {bool(has_main)}, "
+            f"分组数: {len(self.channel_map)}, 过滤: {filter_desc})"
         )
 
     async def stop(self):
@@ -75,11 +83,15 @@ class TelegramDistributor(BaseDistributor):
             return []
 
         targets: list[str] = []
-        if self.enable_main:
-            self._append_unique(targets, self.main_channel_id)
+        if self.enable_default:
+            self._append_unique(targets, self.default_channel_id)
 
-        for channel_id in self.channel_map.get(normalized, []):
+        routed_channel_ids = self.channel_map.get(normalized, [])
+        for channel_id in routed_channel_ids:
             self._append_unique(targets, channel_id)
+
+        if not routed_channel_ids and self.enable_main:
+            self._append_unique(targets, self.main_channel_id)
 
         return targets
 

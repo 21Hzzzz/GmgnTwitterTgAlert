@@ -135,13 +135,42 @@ def _build_distributor_hub() -> DistributorHub:
         LoggingDistributor(),
         TelegramDistributor(
             bot_token=config.TG_BOT_TOKEN,
-            main_channel_id=config.TG_MAIN_CHANNEL_ID,
+            default_channel_id=config.TG_CHANNEL_ID_DEFAULT,
+            enable_default=config.TG_ENABLE_DEFAULT,
+            main_channel_id=config.TG_CHANNEL_ID_MAIN,
             enable_main=config.TG_ENABLE_MAIN,
             channel_map=config.TG_CHANNEL_MAP,
             filter_handles=config.TG_FILTER_HANDLES,
         ),
     ]
     return DistributorHub(distributors)
+
+
+async def first_login(auth_url: str) -> None:
+    setup_logging()
+    auth_url = auth_url.strip()
+    if not auth_url:
+        raise RuntimeError("first-login requires a GMGN authorization URL")
+    if Xvfb is None:
+        raise RuntimeError(
+            "xvfbwrapper is required to run the first-login flow on Linux. "
+            "Install dependencies with scripts/install_root_ubuntu.sh."
+        ) from XVFB_IMPORT_ERROR
+
+    vdisplay = Xvfb(width=config.XVFB_WIDTH, height=config.XVFB_HEIGHT)
+    vdisplay.start()
+
+    browser = BrowserManager()
+    try:
+        async with async_playwright() as playwright:
+            await browser.launch(playwright)
+            await browser.run_first_login(auth_url)
+    finally:
+        await browser.close()
+        try:
+            vdisplay.stop()
+        except Exception as e:
+            logger.warning(f"Xvfb cleanup failed during first-login, ignored: {e}")
 
 
 async def main():
@@ -260,7 +289,6 @@ async def main():
             page.on("websocket", on_web_socket)
             page.on("response", handle_http_response)
 
-            await browser.run_first_login_if_needed()
             await browser.goto_monitor_page()
             await browser.handle_popups()
             await browser.switch_to_mine_tab()

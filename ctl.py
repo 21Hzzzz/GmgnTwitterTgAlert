@@ -1,274 +1,294 @@
 #!/usr/bin/env python3
-"""GmgnTwitterClaw 服务快捷控制面板。
+"""Command-line controller installed as `gta` on the server."""
 
-用法: python ctl.py          → 交互式菜单
-      python ctl.py start    → 直接启动
-      python ctl.py stop     → 直接停止
-      python ctl.py restart  → 直接重启
-      python ctl.py status   → 查看状态
-      python ctl.py log      → 实时日志
-"""
+from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
-from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List
 
 SERVICE_NAME = "gmgn-twitter-monitor.service"
-APP_LOG_FILE = Path(__file__).resolve().parent / "twitter_monitor.log"
+DEFAULT_PROJECT_DIR = Path("/root/GmgnTwitterTgAlert")
+GTA_BIN = Path("/usr/local/bin/gta")
 
-# ──────────────────────────── 颜色工具 ────────────────────────────
 
-def _c(code: int, text: str) -> str:
-    return f"\033[{code}m{text}\033[0m"
+def _detect_project_dir() -> Path:
+    env_dir = os.environ.get("GTA_PROJECT_DIR", "").strip()
+    if env_dir:
+        return Path(env_dir)
 
-def green(t: str) -> str:  return _c(32, t)
-def red(t: str) -> str:    return _c(31, t)
-def yellow(t: str) -> str: return _c(33, t)
-def cyan(t: str) -> str:   return _c(36, t)
-def bold(t: str) -> str:   return _c(1, t)
-def dim(t: str) -> str:    return _c(2, t)
+    here = Path(__file__).resolve().parent
+    if (here / "gmgn_twitter_monitor").is_dir():
+        return here
 
-# ──────────────────────────── 核心操作 ────────────────────────────
+    return DEFAULT_PROJECT_DIR
+
+
+PROJECT_DIR = _detect_project_dir()
+ENV_FILE = PROJECT_DIR / ".env"
+ENV_EXAMPLE = PROJECT_DIR / ".env.example"
+SERVICE_FILE = PROJECT_DIR / SERVICE_NAME
+WARP_SCRIPT = PROJECT_DIR / "scripts" / "install_warp_proxy.sh"
+
+
+def _uv_bin() -> str:
+    return os.environ.get("UV_BIN") or shutil.which("uv") or "/root/.local/bin/uv"
+
 
 def _is_root() -> bool:
     geteuid = getattr(os, "geteuid", None)
     return callable(geteuid) and geteuid() == 0
 
 
-def _strip_sudo_for_root(cmd: List[str]) -> List[str]:
-    if _is_root() and cmd and cmd[0] == "sudo":
-        return cmd[1:]
-    return cmd
+def _sudo(cmd: list[str]) -> list[str]:
+    if _is_root() or not cmd or cmd[0] == "sudo":
+        return cmd
+    return ["sudo", *cmd]
 
 
-def _run(cmd: List[str], *, replace: bool = False) -> int:
-    """执行命令，replace=True 时用 os.execvp 替换当前进程（用于实时日志跟踪）。"""
-    cmd = _strip_sudo_for_root(cmd)
+def _run(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    replace: bool = False,
+) -> int:
+    full_cmd = _sudo(cmd)
     if replace:
-        print(dim("(按 Ctrl+C 退出日志跟踪)\n"))
-        os.execvp(cmd[0], cmd)
-        return 0  # 不会执行到这里
-    result = subprocess.run(cmd, check=False)
-    return result.returncode
+        if cwd:
+            os.chdir(cwd)
+        merged_env = os.environ.copy()
+        if env:
+            merged_env.update(env)
+        os.execvpe(full_cmd[0], full_cmd, merged_env)
+        return 0
+
+    return subprocess.run(full_cmd, cwd=cwd, env=env, check=False).returncode
 
 
-def do_start():
-    print(cyan("▶ 正在启动服务..."))
-    rc = _run(["sudo", "systemctl", "start", SERVICE_NAME])
-    if rc == 0:
-        print(green("✅ 服务已启动"))
-        do_status()
-    else:
-        print(red(f"❌ 启动失败 (退出码: {rc})"))
-
-
-def do_stop():
-    print(yellow("⏹ 正在停止服务..."))
-    rc = _run(["sudo", "systemctl", "stop", SERVICE_NAME])
-    if rc == 0:
-        print(green("✅ 服务已停止"))
-    else:
-        print(red(f"❌ 停止失败 (退出码: {rc})"))
-
-
-def do_restart():
-    print(cyan("🔄 正在重启服务..."))
-    rc = _run(["sudo", "systemctl", "restart", SERVICE_NAME])
-    if rc == 0:
-        print(green("✅ 服务已重启"))
-        do_status()
-    else:
-        print(red(f"❌ 重启失败 (退出码: {rc})"))
-
-
-def do_status():
-    print(cyan("\n📊 服务状态:\n"))
-    _run(["sudo", "systemctl", "status", SERVICE_NAME, "--no-pager", "-l"])
-
-
-def do_log_realtime():
-    print(cyan("📜 实时 systemd 日志 (journalctl -f):"))
-    _run(
-        ["sudo", "journalctl", "-u", SERVICE_NAME, "-f", "--no-pager", "-o", "cat"],
-        replace=True,
+def _capture(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        cmd,
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
     )
 
 
-def do_log_recent():
-    try:
-        n = input(cyan("  输入要查看的行数 [默认 50]: ")).strip()
-        n = int(n) if n else 50
-    except ValueError:
-        n = 50
-    print(cyan(f"\n📜 最近 {n} 条 systemd 日志:\n"))
-    _run(["sudo", "journalctl", "-u", SERVICE_NAME, "--no-pager", "-o", "cat", "-n", str(n)])
+def _require_project() -> bool:
+    if not PROJECT_DIR.exists():
+        print(f"Project directory not found: {PROJECT_DIR}")
+        print("Run the one-line installer first.")
+        return False
+    return True
 
 
-def do_log_app():
-    if not APP_LOG_FILE.exists():
-        print(red(f"❌ 应用日志文件不存在: {APP_LOG_FILE}"))
-        return
-    try:
-        n = input(cyan("  输入要查看的行数 [默认 80]: ")).strip()
-        n = int(n) if n else 80
-    except ValueError:
-        n = 80
-    print(cyan(f"\n📜 应用日志 (最后 {n} 行):\n"))
-    _run(["tail", "-n", str(n), str(APP_LOG_FILE)])
+def _require_env() -> bool:
+    if ENV_FILE.exists():
+        return True
+    print(f"Missing config file: {ENV_FILE}")
+    if ENV_EXAMPLE.exists():
+        print(f"Create it with: cp {ENV_EXAMPLE} {ENV_FILE}")
+    print("Edit .env manually before starting the service.")
+    return False
 
 
-def do_log_app_follow():
-    """彩色实时日志 — 通过 journalctl 输出 stderr 中的 loguru 彩色日志。"""
-    print(cyan("📜 实时彩色日志 (journalctl stderr):"))
-    _run(
-        ["sudo", "journalctl", "-u", SERVICE_NAME, "-f", "--no-pager",
-         "-o", "cat", "-p", "0..7"],
-        replace=True,
+def _service_is_active() -> bool:
+    result = _capture(["systemctl", "is-active", "--quiet", SERVICE_NAME])
+    return result.returncode == 0
+
+
+def _ask_first_login() -> bool:
+    if not sys.stdin.isatty():
+        print("Non-interactive start detected; skipping first-login prompt.")
+        return False
+
+    answer = input("Run first-login authorization before starting? [y/N]: ").strip().lower()
+    return answer in {"y", "yes"}
+
+
+def _run_first_login() -> bool:
+    auth_url = input("Paste GMGN authorization URL: ").strip()
+    if not auth_url:
+        print("Authorization URL is empty; aborting start.")
+        return False
+
+    env = os.environ.copy()
+    env["GMGN_LOGIN_URL"] = auth_url
+    rc = _run(
+        [_uv_bin(), "run", "python", "-m", "gmgn_twitter_monitor", "first-login"],
+        cwd=PROJECT_DIR,
+        env=env,
     )
+    if rc != 0:
+        print(f"first-login failed with exit code {rc}; service was not started.")
+        return False
+    return True
 
 
-def do_next_restart():
-    """计算并显示 systemd 12h 定时重启的剩余时间。"""
-    print(cyan("\n⏰ 12h 定时重启信息:\n"))
-    try:
-        # 获取服务激活时间戳
-        result = subprocess.run(
-            _strip_sudo_for_root([
-                "sudo", "systemctl", "show", SERVICE_NAME,
-                "--property=ActiveEnterTimestamp", "--no-pager",
-            ]),
-            capture_output=True, text=True, check=False,
-        )
-        raw = result.stdout.strip()
-        # 格式示例: ActiveEnterTimestamp=Fri 2026-04-11 02:30:00 CST
-        if "=" not in raw or not raw.split("=", 1)[1].strip():
-            print(yellow("  ⚠️ 无法获取服务启动时间（服务可能未运行）"))
-            return
-
-        ts_str = raw.split("=", 1)[1].strip()
-        # systemd 时间戳去掉星期和时区，只解析日期+时间部分
-        parts = ts_str.split()
-        if len(parts) >= 3:
-            dt_str = f"{parts[1]} {parts[2]}"
-        else:
-            dt_str = " ".join(parts)
-
-        start_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-        next_restart_dt = start_dt + timedelta(hours=12)
-        now = datetime.now()
-        remaining = next_restart_dt - now
-
-        print(f"  {'服务启动时间:':<12} {green(str(start_dt))}")
-        print(f"  {'预计重启时间:':<12} {yellow(str(next_restart_dt))}")
-        if remaining.total_seconds() > 0:
-            h, rem = divmod(int(remaining.total_seconds()), 3600)
-            m, s = divmod(rem, 60)
-            print(f"  {'距离重启还有:':<12} {cyan(f'{h}h {m}m {s}s')}")
-        else:
-            print(f"  {red('⚠️ 已超过预计重启时间，服务可能正在/已完成重启')}")
-
-    except Exception as e:
-        print(red(f"  ❌ 获取重启信息失败: {e}"))
+def _install_service_and_gta() -> int:
+    rc = _run(["install", "-m", "0644", str(SERVICE_FILE), f"/etc/systemd/system/{SERVICE_NAME}"])
+    if rc != 0:
+        return rc
+    rc = _run(["systemctl", "daemon-reload"])
+    if rc != 0:
+        return rc
+    rc = _run(["chmod", "0755", str(PROJECT_DIR / "ctl.py")])
+    if rc != 0:
+        return rc
+    return _run(["ln", "-sfn", str(PROJECT_DIR / "ctl.py"), str(GTA_BIN)])
 
 
-def do_enable():
-    print(cyan("⚙️ 设置开机自启..."))
-    _run(["sudo", "systemctl", "enable", SERVICE_NAME])
-    print(green("✅ 已设置开机自启"))
+def _refresh_dependencies() -> int:
+    uv = _uv_bin()
+    commands = [
+        [uv, "venv"],
+        [uv, "pip", "install", "-r", "requirements.txt"],
+        [uv, "run", "playwright", "install", "chromium"],
+        [uv, "run", "playwright", "install-deps", "chromium"],
+    ]
+    for command in commands:
+        rc = _run(command, cwd=PROJECT_DIR)
+        if rc != 0:
+            return rc
+    return 0
 
 
-def do_disable():
-    print(yellow("⚙️ 取消开机自启..."))
-    _run(["sudo", "systemctl", "disable", SERVICE_NAME])
-    print(green("✅ 已取消开机自启"))
+def do_start() -> int:
+    if not _require_project() or not _require_env():
+        return 1
+    if _service_is_active():
+        print(f"{SERVICE_NAME} is already running.")
+        return _run(["systemctl", "status", SERVICE_NAME, "--no-pager", "-l"])
+
+    if _ask_first_login() and not _run_first_login():
+        return 1
+
+    rc = _run(["systemctl", "start", SERVICE_NAME])
+    if rc == 0:
+        print(f"{SERVICE_NAME} started.")
+        _run(["systemctl", "status", SERVICE_NAME, "--no-pager", "-l"])
+    return rc
 
 
-# ──────────────────────────── 菜单 ────────────────────────────
+def do_stop() -> int:
+    return _run(["systemctl", "stop", SERVICE_NAME])
 
-MENU_ITEMS = [
-    ("启动服务",                    do_start),
-    ("停止服务",                    do_stop),
-    ("重启服务",                    do_restart),
-    ("查看服务状态",                do_status),
-    ("⏰ 查看下次 12h 重启时间",    do_next_restart),
-    ("实时彩色日志 ✨",             do_log_app_follow),
-    ("最近 N 条日志",               do_log_recent),
-    ("应用日志 (纯文本文件)",       do_log_app),
-    ("实时日志 (systemd 原始)",     do_log_realtime),
-    ("设置开机自启",                do_enable),
-    ("取消开机自启",                do_disable),
-]
 
-# CLI 快捷命令映射
-CLI_SHORTCUTS = {
-    "start":   do_start,
-    "stop":    do_stop,
+def do_restart() -> int:
+    if not _require_project() or not _require_env():
+        return 1
+    rc = _run(["systemctl", "restart", SERVICE_NAME])
+    if rc == 0:
+        print(f"{SERVICE_NAME} restarted and reloaded .env.")
+        _run(["systemctl", "status", SERVICE_NAME, "--no-pager", "-l"])
+    return rc
+
+
+def do_status() -> int:
+    status_rc = _run(["systemctl", "status", SERVICE_NAME, "--no-pager", "-l"])
+    print("\nFollowing live logs. Press Ctrl+C to exit.\n")
+    _run(["journalctl", "-u", SERVICE_NAME, "-f", "--no-pager", "-o", "cat"], replace=True)
+    return status_rc
+
+
+def do_log() -> int:
+    print("Following live logs. Press Ctrl+C to exit.\n")
+    _run(["journalctl", "-u", SERVICE_NAME, "-f", "--no-pager", "-o", "cat"], replace=True)
+    return 0
+
+
+def do_update() -> int:
+    if not _require_project():
+        return 1
+    if not (PROJECT_DIR / ".git").is_dir():
+        print(f"{PROJECT_DIR} is not a git repository; cannot update safely.")
+        return 1
+
+    dirty = _capture(["git", "status", "--porcelain", "--untracked-files=no"], cwd=PROJECT_DIR)
+    if dirty.returncode != 0:
+        print(dirty.stderr.strip() or "git status failed")
+        return dirty.returncode
+    if dirty.stdout.strip():
+        print("Tracked local changes detected; update stopped.")
+        print("Commit, discard, or stash these changes manually, then run `gta update` again.")
+        print(dirty.stdout.strip())
+        return 1
+
+    rc = _run(["git", "pull", "--ff-only"], cwd=PROJECT_DIR)
+    if rc != 0:
+        return rc
+    rc = _refresh_dependencies()
+    if rc != 0:
+        return rc
+    rc = _install_service_and_gta()
+    if rc == 0:
+        print("Update complete. Service was not restarted; run `gta restart` when ready.")
+    return rc
+
+
+def do_warp() -> int:
+    if not WARP_SCRIPT.exists():
+        print(f"WARP installer not found: {WARP_SCRIPT}")
+        return 1
+    return _run(["bash", str(WARP_SCRIPT)])
+
+
+def do_enable() -> int:
+    return _run(["systemctl", "enable", SERVICE_NAME])
+
+
+def do_disable() -> int:
+    return _run(["systemctl", "disable", SERVICE_NAME])
+
+
+COMMANDS = {
+    "start": do_start,
+    "stop": do_stop,
     "restart": do_restart,
-    "status":  do_status,
-    "log":     do_log_realtime,
-    "logs":    do_log_realtime,
+    "status": do_status,
+    "log": do_log,
+    "logs": do_log,
+    "update": do_update,
+    "warp": do_warp,
+    "install-warp": do_warp,
+    "enable": do_enable,
+    "disable": do_disable,
 }
 
 
-def print_banner():
-    print()
-    print(bold(cyan("╔══════════════════════════════════════════╗")))
-    print(bold(cyan("║   🐦 GmgnTwitterClaw 服务控制面板       ║")))
-    print(bold(cyan("╚══════════════════════════════════════════╝")))
-    print()
+def print_help() -> None:
+    print(
+        "Usage: gta <command>\n\n"
+        "Commands:\n"
+        "  start         Start service; optionally run first-login first\n"
+        "  stop          Stop service\n"
+        "  restart       Restart service and reload .env\n"
+        "  status        Show status, then follow live logs\n"
+        "  log|logs      Follow live logs\n"
+        "  update        Pull latest code and refresh dependencies; no restart\n"
+        "  warp          Install optional Cloudflare WARP local proxy\n"
+        "  enable        Enable service on boot\n"
+        "  disable       Disable service on boot\n"
+    )
 
 
-def print_menu():
-    for i, (label, _) in enumerate(MENU_ITEMS, 1):
-        print(f"  {bold(cyan(str(i)))}. {label}")
-    print(f"  {bold(red('0'))}. 退出")
-    print()
+def main() -> int:
+    if len(sys.argv) < 2 or sys.argv[1] in {"help", "-h", "--help"}:
+        print_help()
+        return 0
 
-
-def interactive_loop():
-    print_banner()
-    while True:
-        print_menu()
-        try:
-            choice = input(bold(f"  请选择 [0-{len(MENU_ITEMS)}]: ")).strip()
-        except (KeyboardInterrupt, EOFError):
-            print("\n" + dim("再见 👋"))
-            break
-
-        if choice == "0" or choice.lower() in ("q", "quit", "exit"):
-            print(dim("再见 👋"))
-            break
-
-        try:
-            idx = int(choice)
-            if 1 <= idx <= len(MENU_ITEMS):
-                print()
-                MENU_ITEMS[idx - 1][1]()
-                print()
-            else:
-                print(red("  ❌ 无效选项，请重新输入\n"))
-        except ValueError:
-            print(red("  ❌ 请输入数字\n"))
-
-
-def main():
-    # 支持 CLI 快捷命令: python ctl.py start/stop/restart/status/log
-    if len(sys.argv) > 1:
-        cmd = sys.argv[1].lower()
-        if cmd in CLI_SHORTCUTS:
-            CLI_SHORTCUTS[cmd]()
-        elif cmd in ("help", "-h", "--help"):
-            print(__doc__)
-        else:
-            print(red(f"❌ 未知命令: {cmd}"))
-            print(f"  可用命令: {', '.join(CLI_SHORTCUTS.keys())}")
-            sys.exit(1)
-    else:
-        interactive_loop()
+    command = sys.argv[1].strip().lower()
+    handler = COMMANDS.get(command)
+    if not handler:
+        print(f"Unknown command: {command}\n")
+        print_help()
+        return 1
+    return handler()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

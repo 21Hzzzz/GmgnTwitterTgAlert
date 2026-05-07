@@ -22,9 +22,6 @@ def _parse_handles(raw: str) -> list[str]:
     ]
 
 
-FIRST_RUN_LOGIN = _env_bool("FIRST_RUN_LOGIN")
-AUTH_URL = os.getenv("AUTH_URL", "").strip()
-
 LOG_FILE = str(BASE_DIR / "twitter_monitor.log")
 USER_DATA_DIR = str(BASE_DIR / "browser_data")
 SCREENSHOT_PATH = str(BASE_DIR / "monitor_running.png")
@@ -37,8 +34,10 @@ XVFB_HEIGHT = 1080
 
 # ---------- Telegram delivery ----------
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "").strip()
+TG_ENABLE_DEFAULT = _env_bool("TG_ENABLE_DEFAULT")
+TG_CHANNEL_ID_DEFAULT = os.getenv("TG_CHANNEL_ID_DEFAULT", "").strip()
 TG_ENABLE_MAIN = _env_bool("TG_ENABLE_MAIN")
-TG_MAIN_CHANNEL_ID = os.getenv("TG_MAIN_CHANNEL_ID", "").strip()
+TG_CHANNEL_ID_MAIN = os.getenv("TG_CHANNEL_ID_MAIN", "").strip()
 
 # Dynamic route groups. Handles are not auto-added to TG_FILTER_HANDLES; the
 # filter is an explicit global allowlist only.

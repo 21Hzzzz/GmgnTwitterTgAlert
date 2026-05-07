@@ -24,18 +24,19 @@ uv run python gmgn_twitter_monitor.py
 ```
 
 ### First-login bootstrap
-For a fresh server, set `gmgn_twitter_monitor/config.py`:
-- `FIRST_RUN_LOGIN = True`
-- `AUTH_URL = ...` with a valid GMGN login URL
-
-Then run:
+For a fresh server, use the deployed shortcut:
 ```bash
-uv run python -m gmgn_twitter_monitor
+gta start
 ```
-After browser state is written into `browser_data/`, switch `FIRST_RUN_LOGIN` back to `False`.
+When prompted, choose first-login and paste a valid GMGN login URL.
+
+For a direct code-level invocation, pass the URL through the process environment:
+```bash
+GMGN_LOGIN_URL='https://gmgn.ai/tglogin?...' uv run python -m gmgn_twitter_monitor first-login
+```
 
 ### External runtime dependency
-This project expects a local SOCKS5 proxy at `socks5://127.0.0.1:40000` (`gmgn_twitter_monitor/config.py`). The deployment guide documents Cloudflare WARP setup for this.
+WARP is optional. The app uses direct network access unless `.env` sets `PROXY_SERVER`, for example `socks5://127.0.0.1:40000`.
 
 ### Tests / lint
 There is currently no test suite or lint configuration checked into the repository.

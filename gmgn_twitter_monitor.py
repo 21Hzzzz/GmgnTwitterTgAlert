@@ -1,9 +1,8 @@
 import asyncio
 
-from gmgn_twitter_monitor.app import main
-from gmgn_twitter_monitor.config import AUTH_URL, FIRST_RUN_LOGIN
+from gmgn_twitter_monitor.app import first_login, main
 
-__all__ = ["main", "FIRST_RUN_LOGIN", "AUTH_URL"]
+__all__ = ["main", "first_login"]
 
 if __name__ == "__main__":
     asyncio.run(main())
