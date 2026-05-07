@@ -56,6 +56,7 @@ TG_ENABLE_AD=True
 TG_CHANNEL_ID_AD=-1002490671103
 
 TG_FILTER_HANDLES=
+BINANCE_SQUARE_HANDLES=cz,heyi
 DEEPSEEK_API_KEY=
 ```
 
@@ -67,6 +68,7 @@ DEEPSEEK_API_KEY=
 - 同一个 handle 可以放进多个分组。
 - 如果默认群、主群、分组频道 ID 相同，程序只会发送一次。
 - `TG_FILTER_HANDLES` 默认为空，表示不过滤；一旦填写，它就是全局白名单，未列入的 handle 不会发往任何 Telegram 目标。
+- `BINANCE_SQUARE_HANDLES` 用于币安广场等非 Twitter 来源账号；这些账号无法通过 `fxtwitter.com` 生成预览时，程序会改用 GMGN 数据里的原图直链作为 Telegram 大图预览。
 
 ## `gta` 快捷命令
 

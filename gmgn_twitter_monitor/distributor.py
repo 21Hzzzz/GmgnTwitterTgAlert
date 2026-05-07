@@ -36,6 +36,7 @@ class TelegramDistributor(BaseDistributor):
         enable_main: bool = False,
         channel_map: dict[str, list[str]] | None = None,
         filter_handles: list[str] | None = None,
+        raw_preview_handles: list[str] | None = None,
     ):
         self.bot_token = bot_token
         self.default_channel_id = default_channel_id
@@ -44,6 +45,7 @@ class TelegramDistributor(BaseDistributor):
         self.enable_main = enable_main
         self.channel_map = channel_map or {}
         self.filter_handles = [h.lower().lstrip("@") for h in (filter_handles or [])]
+        self.raw_preview_handles = [h.lower().lstrip("@") for h in (raw_preview_handles or [])]
         self.api_base = f"https://api.telegram.org/bot{bot_token}"
         self._session: aiohttp.ClientSession | None = None
 
@@ -75,6 +77,69 @@ class TelegramDistributor(BaseDistributor):
     def _append_unique(targets: list[str], channel_id: str | None) -> None:
         if channel_id and channel_id not in targets:
             targets.append(channel_id)
+
+    @staticmethod
+    def _first_media_url(*media_lists: list[dict] | None) -> str | None:
+        allowed_types = {"photo", "image", "thumbnail", "video"}
+        for media_list in media_lists:
+            for media in media_list or []:
+                if not isinstance(media, dict):
+                    continue
+                media_type = (media.get("type") or "").lower()
+                media_url = media.get("url")
+                if media_url and media_type in allowed_types:
+                    return media_url
+        return None
+
+    def _resolve_preview_url(self, message: dict, handle: str, action: str) -> str | None:
+        normalized = self._normalize_handle(handle)
+        if normalized in self.raw_preview_handles:
+            content = message.get("content") or {}
+            reference = message.get("reference") or {}
+            return self._first_media_url(content.get("media"), reference.get("media"))
+
+        if action in ("follow", "unfollow"):
+            target_handle = (message.get("unfollow_target") or {}).get("handle")
+            if target_handle:
+                return f"https://vxtwitter.com/{target_handle}"
+        elif action == "repost":
+            reference = message.get("reference") or {}
+            ref_handle = reference.get("author_handle")
+            ref_tweet_id = reference.get("tweet_id")
+            if ref_handle and ref_tweet_id:
+                return f"https://fxtwitter.com/{ref_handle}/status/{ref_tweet_id}"
+            if message.get("tweet_id") and handle:
+                return f"https://fxtwitter.com/{handle}/status/{message.get('tweet_id')}"
+        elif action in ("reply", "quote"):
+            reference = message.get("reference") or {}
+            ref_handle = reference.get("author_handle")
+            ref_tweet_id = reference.get("tweet_id")
+            content = message.get("content") or {}
+            has_media = len(content.get("media") or []) > 0
+
+            if has_media and message.get("tweet_id") and handle:
+                return f"https://fxtwitter.com/{handle}/status/{message.get('tweet_id')}"
+            if ref_handle and ref_tweet_id:
+                return f"https://fxtwitter.com/{ref_handle}/status/{ref_tweet_id}"
+            tweet_id = message.get("tweet_id", "")
+            if tweet_id and handle:
+                return f"https://fxtwitter.com/{handle}/status/{tweet_id}"
+        elif action == "delete_post":
+            reference = message.get("reference") or {}
+            ref_handle = reference.get("author_handle")
+            ref_tweet_id = reference.get("tweet_id")
+            if ref_handle and ref_tweet_id:
+                return f"https://fxtwitter.com/{ref_handle}/status/{ref_tweet_id}"
+            tweet_id = message.get("tweet_id", "")
+            if tweet_id and handle:
+                return f"https://fxtwitter.com/{handle}/status/{tweet_id}"
+        elif action in ("tweet", "pin", "unpin"):
+            tweet_id = message.get("tweet_id", "")
+            if tweet_id and handle:
+                return f"https://fxtwitter.com/{handle}/status/{tweet_id}"
+        elif handle:
+            return f"https://vxtwitter.com/{handle}"
+        return None
 
     def resolve_target_channel_ids(self, handle: str | None) -> list[str]:
         """Return Telegram target IDs for a handle, preserving order and uniqueness."""
@@ -339,50 +404,7 @@ class TelegramDistributor(BaseDistributor):
         header = self._format_message(message)
         initial_text = f"{header}\n\n{footer}"
 
-        preview_url = None
-        if action in ("follow", "unfollow"):
-            target_handle = message.get("unfollow_target", {}).get("handle")
-            if target_handle:
-                preview_url = f"https://vxtwitter.com/{target_handle}"
-        elif action == "repost":
-            reference = message.get("reference") or {}
-            ref_handle = reference.get("author_handle")
-            ref_tweet_id = reference.get("tweet_id")
-            if ref_handle and ref_tweet_id:
-                preview_url = f"https://fxtwitter.com/{ref_handle}/status/{ref_tweet_id}"
-            elif message.get("tweet_id") and handle:
-                preview_url = f"https://fxtwitter.com/{handle}/status/{message.get('tweet_id')}"
-        elif action in ("reply", "quote"):
-            reference = message.get("reference") or {}
-            ref_handle = reference.get("author_handle")
-            ref_tweet_id = reference.get("tweet_id")
-            content = message.get("content") or {}
-            has_media = len(content.get("media") or []) > 0
-
-            if has_media and message.get("tweet_id") and handle:
-                preview_url = f"https://fxtwitter.com/{handle}/status/{message.get('tweet_id')}"
-            elif ref_handle and ref_tweet_id:
-                preview_url = f"https://fxtwitter.com/{ref_handle}/status/{ref_tweet_id}"
-            else:
-                tweet_id = message.get("tweet_id", "")
-                if tweet_id and handle:
-                    preview_url = f"https://fxtwitter.com/{handle}/status/{tweet_id}"
-        elif action == "delete_post":
-            reference = message.get("reference") or {}
-            ref_handle = reference.get("author_handle")
-            ref_tweet_id = reference.get("tweet_id")
-            if ref_handle and ref_tweet_id:
-                preview_url = f"https://fxtwitter.com/{ref_handle}/status/{ref_tweet_id}"
-            else:
-                tweet_id = message.get("tweet_id", "")
-                if tweet_id and handle:
-                    preview_url = f"https://fxtwitter.com/{handle}/status/{tweet_id}"
-        elif action in ("tweet", "pin", "unpin"):
-            tweet_id = message.get("tweet_id", "")
-            if tweet_id and handle:
-                preview_url = f"https://fxtwitter.com/{handle}/status/{tweet_id}"
-        elif handle:
-            preview_url = f"https://vxtwitter.com/{handle}"
+        preview_url = self._resolve_preview_url(message, handle, action)
 
         link_preview_options = {"is_disabled": False, "prefer_large_media": True}
         if preview_url:

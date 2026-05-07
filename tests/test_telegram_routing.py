@@ -108,6 +108,57 @@ class CapturingTelegramDistributor(TelegramDistributor):
         return {"ok": True}
 
 
+class TelegramPreviewUrlTests(unittest.TestCase):
+    def make_distributor(self) -> TelegramDistributor:
+        return TelegramDistributor(
+            bot_token="token",
+            default_channel_id="-100default",
+            enable_default=True,
+            main_channel_id="-100main",
+            enable_main=True,
+            raw_preview_handles=["cz", "heyi"],
+        )
+
+    def test_raw_preview_handle_uses_content_media_url(self):
+        distributor = self.make_distributor()
+        message = {
+            "tweet_id": "123",
+            "content": {"media": [{"type": "photo", "url": "https://img.example/content.jpg"}]},
+            "reference": {"media": [{"type": "photo", "url": "https://img.example/reference.jpg"}]},
+        }
+
+        self.assertEqual(
+            distributor._resolve_preview_url(message, "CZ", "tweet"),
+            "https://img.example/content.jpg",
+        )
+
+    def test_raw_preview_handle_uses_reference_media_when_content_has_none(self):
+        distributor = self.make_distributor()
+        message = {
+            "tweet_id": "123",
+            "content": {"media": []},
+            "reference": {"media": [{"type": "video", "url": "https://img.example/reference.mp4"}]},
+        }
+
+        self.assertEqual(
+            distributor._resolve_preview_url(message, "heyi", "quote"),
+            "https://img.example/reference.mp4",
+        )
+
+    def test_normal_handle_still_uses_fxtwitter_preview(self):
+        distributor = self.make_distributor()
+        message = {
+            "tweet_id": "123",
+            "content": {"media": [{"type": "photo", "url": "https://img.example/content.jpg"}]},
+            "reference": None,
+        }
+
+        self.assertEqual(
+            distributor._resolve_preview_url(message, "elonmusk", "tweet"),
+            "https://fxtwitter.com/elonmusk/status/123",
+        )
+
+
 class TelegramTranslationEditTests(unittest.IsolatedAsyncioTestCase):
     async def test_translation_edit_keeps_original_text_before_translation(self):
         distributor = CapturingTelegramDistributor()

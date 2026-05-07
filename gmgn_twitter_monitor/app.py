@@ -141,6 +141,7 @@ def _build_distributor_hub() -> DistributorHub:
             enable_main=config.TG_ENABLE_MAIN,
             channel_map=config.TG_CHANNEL_MAP,
             filter_handles=config.TG_FILTER_HANDLES,
+            raw_preview_handles=config.BINANCE_SQUARE_HANDLES,
         ),
     ]
     return DistributorHub(distributors)

@@ -62,6 +62,9 @@ for key, value in sorted(os.environ.items()):
 
 TG_FILTER_HANDLES = _parse_handles(os.getenv("TG_FILTER_HANDLES", ""))
 
+# ---------- Non-Twitter preview handling ----------
+BINANCE_SQUARE_HANDLES = _parse_handles(os.getenv("BINANCE_SQUARE_HANDLES", ""))
+
 # ---------- DeepSeek translation ----------
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
