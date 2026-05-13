@@ -1,9 +1,20 @@
-from typing import Any, Dict, Optional
+import re
+import time
+from typing import Any, Callable, Dict, Optional
 
 from loguru import logger
-from playwright.async_api import BrowserContext, Error as PlaywrightError, Page, Playwright
+from playwright.async_api import BrowserContext, Error as PlaywrightError, Locator, Page, Playwright
 
 from . import config
+
+VerificationCodeProvider = Callable[[], str]
+
+
+def _normalize_google_verification_code(code: str) -> str:
+    normalized = "".join(code.strip().split())
+    if not re.fullmatch(r"\d{6}", normalized):
+        raise ValueError("谷歌身份验证码必须是 6 位数字")
+    return normalized
 
 
 class BrowserManager:
@@ -38,16 +49,140 @@ class BrowserManager:
             raise RuntimeError("浏览器页面尚未初始化，请先调用 launch()")
         return self.page
 
-    async def run_first_login(self, auth_url: str):
+    async def run_first_login(
+        self,
+        auth_url: str,
+        verification_code_provider: VerificationCodeProvider | None = None,
+    ):
         if not auth_url:
             raise RuntimeError("首次登录需要提供 GMGN 授权 URL")
 
         page = self._require_page()
         logger.info("已进入首次登录模式，正在打开 GMGN 授权页面...")
         await page.goto(auth_url, wait_until="domcontentloaded", timeout=60000)
-        logger.info("授权页面已加载，等待 15 秒写入浏览器登录状态...")
+        logger.info("授权页面已加载，正在检查是否需要谷歌身份验证码...")
+        await self._handle_google_verification_if_present(verification_code_provider)
+        logger.info("等待 15 秒写入浏览器登录状态...")
         await page.wait_for_timeout(15000)
         logger.success("首次登录状态已保存。")
+
+    async def _find_google_verification_dialog(self) -> Locator | None:
+        page = self._require_page()
+        selectors = [
+            "xpath=//*[contains(normalize-space(text()), '谷歌身份验证')]/ancestor-or-self::*[.//input][1]",
+            "xpath=//*[contains(normalize-space(text()), '6 位验证码')]/ancestor-or-self::*[.//input][1]",
+            "[role='dialog']:has-text('谷歌身份验证')",
+            "[role='dialog']:has-text('6 位验证码')",
+            ".pi-modal-wrap:has-text('谷歌身份验证')",
+            ".pi-modal-wrap:has-text('6 位验证码')",
+            ".chakra-modal__content-container:has-text('谷歌身份验证')",
+            ".chakra-modal__content-container:has-text('6 位验证码')",
+        ]
+        for selector in selectors:
+            try:
+                dialog = page.locator(selector).first
+                if await dialog.is_visible(timeout=500):
+                    return dialog
+            except Exception:
+                continue
+        return None
+
+    async def _wait_for_google_verification_dialog(self, timeout_ms: int = 10000) -> Locator | None:
+        page = self._require_page()
+        deadline = time.monotonic() + timeout_ms / 1000
+        while time.monotonic() < deadline:
+            dialog = await self._find_google_verification_dialog()
+            if dialog is not None:
+                return dialog
+            await page.wait_for_timeout(500)
+        return None
+
+    async def _visible_inputs(self, dialog: Locator) -> list[Locator]:
+        inputs = dialog.locator("input")
+        visible_inputs: list[Locator] = []
+        for index in range(await inputs.count()):
+            candidate = inputs.nth(index)
+            try:
+                if await candidate.is_visible(timeout=300):
+                    visible_inputs.append(candidate)
+            except Exception:
+                continue
+        return visible_inputs
+
+    async def _fill_google_verification_code(self, dialog: Locator, code: str) -> None:
+        page = self._require_page()
+        visible_inputs = await self._visible_inputs(dialog)
+        if len(visible_inputs) >= 6:
+            for digit, input_locator in zip(code, visible_inputs[:6]):
+                await input_locator.fill(digit, timeout=3000)
+            return
+
+        if visible_inputs:
+            await visible_inputs[0].fill(code, timeout=3000)
+            return
+
+        first_textbox = dialog.locator("[role='textbox'], [contenteditable='true']").first
+        if await first_textbox.is_visible(timeout=500):
+            await first_textbox.click(timeout=3000)
+            await page.keyboard.type(code, delay=50)
+            return
+
+        raise RuntimeError("检测到谷歌身份验证弹窗，但没有找到可输入验证码的位置")
+
+    async def _click_google_verification_confirm(self, dialog: Locator) -> None:
+        page = self._require_page()
+        confirm_selectors = [
+            "button:has-text('确认')",
+            "[role='button']:has-text('确认')",
+            "button:has-text('Confirm')",
+            "[role='button']:has-text('Confirm')",
+        ]
+        for selector in confirm_selectors:
+            for scope in (dialog, page):
+                try:
+                    button = scope.locator(selector).first
+                    if await button.is_visible(timeout=500):
+                        await button.click(timeout=5000)
+                        return
+                except Exception:
+                    continue
+        raise RuntimeError("检测到谷歌身份验证弹窗，但没有找到确认按钮")
+
+    async def _handle_google_verification_if_present(
+        self,
+        verification_code_provider: VerificationCodeProvider | None,
+    ) -> bool:
+        page = self._require_page()
+        dialog = await self._wait_for_google_verification_dialog()
+        if dialog is None:
+            logger.info("未检测到谷歌身份验证弹窗，继续首次登录流程。")
+            return False
+
+        if verification_code_provider is None:
+            raise RuntimeError("检测到谷歌身份验证弹窗，但当前入口没有提供验证码输入方式")
+
+        logger.warning("检测到谷歌身份验证弹窗，需要输入 6 位动态验证码。")
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                code = _normalize_google_verification_code(verification_code_provider())
+                dialog = await self._find_google_verification_dialog()
+                if dialog is None:
+                    logger.info("验证码输入前弹窗已消失，继续首次登录流程。")
+                    return True
+                await self._fill_google_verification_code(dialog, code)
+                await self._click_google_verification_confirm(dialog)
+                await page.wait_for_timeout(3000)
+                if await self._find_google_verification_dialog() is None:
+                    logger.success("谷歌身份验证码已提交。")
+                    return True
+                last_error = RuntimeError("验证码提交后弹窗仍未关闭")
+                logger.warning("谷歌身份验证弹窗仍存在，验证码可能错误或已过期，请重新输入。")
+            except ValueError as e:
+                last_error = e
+                logger.warning(f"{e}，请重新输入。")
+
+        raise RuntimeError(f"谷歌身份验证码处理失败: {last_error}")
 
     async def goto_monitor_page(self):
         page = self._require_page()

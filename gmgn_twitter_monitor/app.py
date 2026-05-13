@@ -17,7 +17,7 @@ else:
     XVFB_IMPORT_ERROR = None
 
 from . import config
-from .browser import BrowserManager
+from .browser import BrowserManager, VerificationCodeProvider
 from .distributor import (
     DistributorHub,
     LoggingDistributor,
@@ -147,7 +147,10 @@ def _build_distributor_hub() -> DistributorHub:
     return DistributorHub(distributors)
 
 
-async def first_login(auth_url: str) -> None:
+async def first_login(
+    auth_url: str,
+    verification_code_provider: VerificationCodeProvider | None = None,
+) -> None:
     setup_logging()
     auth_url = auth_url.strip()
     if not auth_url:
@@ -165,7 +168,7 @@ async def first_login(auth_url: str) -> None:
     try:
         async with async_playwright() as playwright:
             await browser.launch(playwright)
-            await browser.run_first_login(auth_url)
+            await browser.run_first_login(auth_url, verification_code_provider)
     finally:
         await browser.close()
         try:
