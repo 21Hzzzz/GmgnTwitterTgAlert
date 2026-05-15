@@ -25,6 +25,7 @@ from .distributor import (
 )
 from .logging_setup import setup_logging
 from .parser import build_standardized_message, extract_triggers_map, parse_socketio_payload
+from .summary_store import SummaryStore
 from .watchdog import Watchdog
 
 
@@ -131,6 +132,7 @@ def _cleanup_orphan_processes() -> None:
 
 def _build_distributor_hub() -> DistributorHub:
     """根据 config 组装分发器集线器。"""
+    summary_store = SummaryStore(config.AI_SUMMARY_DB_PATH) if config.AI_SUMMARY_TARGETS else None
     distributors = [
         LoggingDistributor(),
         TelegramDistributor(
@@ -140,8 +142,11 @@ def _build_distributor_hub() -> DistributorHub:
             main_channel_id=config.TG_CHANNEL_ID_MAIN,
             enable_main=config.TG_ENABLE_MAIN,
             channel_map=config.TG_CHANNEL_MAP,
+            route_targets_by_handle=config.TG_ROUTE_TARGETS_BY_HANDLE,
             filter_handles=config.TG_FILTER_HANDLES,
             raw_preview_handles=config.BINANCE_SQUARE_HANDLES,
+            summary_store=summary_store,
+            summary_targets=config.AI_SUMMARY_TARGETS,
         ),
     ]
     return DistributorHub(distributors)

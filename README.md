@@ -9,6 +9,7 @@
 - 分组路由按 Twitter handle 匹配；命中分组的消息发往默认群和对应分组，未命中分组的消息发往默认群和主群。
 - Telegram 频道 ID 自动去重，避免同一目标收到重复消息。
 - DeepSeek 翻译可选，配置 API key 后会在 Telegram 消息发送后追加中文译文。
+- DeepSeek AI 定时总结可选，按 Telegram 目标群汇总过去一段时间内的消息并自动置顶摘要。
 - WARP 代理可选，默认直连；只有配置 `PROXY_SERVER` 时才走代理。
 - systemd 守护，默认 12 小时重启一次，降低长期浏览器运行带来的状态漂移。
 
@@ -58,6 +59,19 @@ TG_CHANNEL_ID_AD=-1002490671103
 TG_FILTER_HANDLES=
 BINANCE_SQUARE_HANDLES=cz,heyi
 DEEPSEEK_API_KEY=
+
+AI_SUMMARY_ENABLED=False
+AI_SUMMARY_DB_PATH=
+AI_SUMMARY_INTERVAL_MINUTES=30
+
+AI_SUMMARY_ENABLE_DEFAULT=False
+AI_SUMMARY_INTERVAL_MINUTES_DEFAULT=
+
+AI_SUMMARY_ENABLE_MAIN=False
+AI_SUMMARY_INTERVAL_MINUTES_MAIN=
+
+AI_SUMMARY_ENABLE_AD=False
+AI_SUMMARY_INTERVAL_MINUTES_AD=
 ```
 
 配置语义：
@@ -69,6 +83,11 @@ DEEPSEEK_API_KEY=
 - 如果默认群、主群、分组频道 ID 相同，程序只会发送一次。
 - `TG_FILTER_HANDLES` 默认为空，表示不过滤；一旦填写，它就是全局白名单，未列入的 handle 不会发往任何 Telegram 目标。
 - `BINANCE_SQUARE_HANDLES` 用于币安广场等非 Twitter 来源账号；这些账号无法通过 `fxtwitter.com` 生成预览时，程序会改用 GMGN 数据里的原图直链作为 Telegram 大图预览。
+- `AI_SUMMARY_ENABLED=True` 时启用 AI 定时总结框架，但每个目标群仍需单独开启 `AI_SUMMARY_ENABLE_<GROUP>=True`。
+- `AI_SUMMARY_INTERVAL_MINUTES` 是默认总结窗口；`AI_SUMMARY_INTERVAL_MINUTES_<GROUP>` 可为单个目标群覆盖窗口。
+- 摘要分组 key 为 `DEFAULT`、`MAIN` 或 `TG_ROUTING_<GROUP>` 的 `<GROUP>`，例如 `AI_SUMMARY_ENABLE_AD=True`。
+- 摘要发送到对应 Telegram 目标群后会调用 `pinChatMessage` 静默置顶；bot 必须拥有置顶权限。
+- `AI_SUMMARY_DB_PATH` 为空时默认使用项目根目录下的 `summary.db`。
 
 ## `gta` 快捷命令
 

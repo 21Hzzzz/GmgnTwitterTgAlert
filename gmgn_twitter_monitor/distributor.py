@@ -1,6 +1,8 @@
 import asyncio
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import aiohttp
 from loguru import logger
@@ -24,6 +26,12 @@ class LoggingDistributor(BaseDistributor):
         logger.debug(f"完整标准 JSON: {message}")
 
 
+@dataclass(frozen=True)
+class TelegramRoute:
+    group_key: str
+    chat_id: str
+
+
 class TelegramDistributor(BaseDistributor):
     """Send standardized GMGN messages to Telegram groups/channels."""
 
@@ -35,8 +43,11 @@ class TelegramDistributor(BaseDistributor):
         main_channel_id: str = "",
         enable_main: bool = False,
         channel_map: dict[str, list[str]] | None = None,
+        route_targets_by_handle: dict[str, list[dict[str, str]]] | None = None,
         filter_handles: list[str] | None = None,
         raw_preview_handles: list[str] | None = None,
+        summary_store: Any | None = None,
+        summary_targets: list[dict[str, str | int]] | None = None,
     ):
         self.bot_token = bot_token
         self.default_channel_id = default_channel_id
@@ -44,8 +55,17 @@ class TelegramDistributor(BaseDistributor):
         self.main_channel_id = main_channel_id
         self.enable_main = enable_main
         self.channel_map = channel_map or {}
+        self.route_targets_by_handle = self._normalize_route_targets(route_targets_by_handle)
         self.filter_handles = [h.lower().lstrip("@") for h in (filter_handles or [])]
         self.raw_preview_handles = [h.lower().lstrip("@") for h in (raw_preview_handles or [])]
+        self.summary_store = summary_store
+        self.summary_targets = summary_targets or []
+        self.summary_targets_by_chat_id = {
+            str(target["chat_id"]): target
+            for target in self.summary_targets
+            if target.get("chat_id")
+        }
+        self._summary_scheduler = None
         self.api_base = f"https://api.telegram.org/bot{bot_token}"
         self._session: aiohttp.ClientSession | None = None
 
@@ -63,8 +83,20 @@ class TelegramDistributor(BaseDistributor):
             f"(默认群开启: {bool(has_default)}, 未路由主群开启: {bool(has_main)}, "
             f"分组数: {len(self.channel_map)}, 过滤: {filter_desc})"
         )
+        if self.summary_store and self.summary_targets:
+            from .summary_scheduler import SummaryScheduler
+
+            self._summary_scheduler = SummaryScheduler(
+                self.summary_store,
+                self.summary_targets,
+                self,
+            )
+            await self._summary_scheduler.start()
 
     async def stop(self):
+        if self._summary_scheduler:
+            await self._summary_scheduler.stop()
+            self._summary_scheduler = None
         if self._session:
             await self._session.close()
             logger.info("Telegram 分发器已关闭")
@@ -77,6 +109,32 @@ class TelegramDistributor(BaseDistributor):
     def _append_unique(targets: list[str], channel_id: str | None) -> None:
         if channel_id and channel_id not in targets:
             targets.append(channel_id)
+
+    @staticmethod
+    def _append_unique_route(
+        routes: list[TelegramRoute],
+        seen_chat_ids: set[str],
+        group_key: str,
+        chat_id: str | None,
+    ) -> None:
+        if chat_id and chat_id not in seen_chat_ids:
+            routes.append(TelegramRoute(group_key=group_key, chat_id=chat_id))
+            seen_chat_ids.add(chat_id)
+
+    @staticmethod
+    def _normalize_route_targets(
+        route_targets_by_handle: dict[str, list[dict[str, str]]] | None,
+    ) -> dict[str, list[TelegramRoute]]:
+        normalized: dict[str, list[TelegramRoute]] = {}
+        for handle, targets in (route_targets_by_handle or {}).items():
+            normalized_handle = TelegramDistributor._normalize_handle(handle)
+            normalized[normalized_handle] = []
+            for target in targets:
+                group_key = str(target.get("group_key") or "ROUTE")
+                chat_id = str(target.get("chat_id") or "")
+                if chat_id:
+                    normalized[normalized_handle].append(TelegramRoute(group_key, chat_id))
+        return normalized
 
     @staticmethod
     def _first_media_url(*media_lists: list[dict] | None) -> str | None:
@@ -143,22 +201,32 @@ class TelegramDistributor(BaseDistributor):
 
     def resolve_target_channel_ids(self, handle: str | None) -> list[str]:
         """Return Telegram target IDs for a handle, preserving order and uniqueness."""
+        return [route.chat_id for route in self.resolve_target_routes(handle)]
+
+    def resolve_target_routes(self, handle: str | None) -> list[TelegramRoute]:
+        """Return Telegram target routes for a handle, preserving send order."""
         normalized = self._normalize_handle(handle)
         if self.filter_handles and normalized not in self.filter_handles:
             return []
 
-        targets: list[str] = []
+        routes: list[TelegramRoute] = []
+        seen_chat_ids: set[str] = set()
         if self.enable_default:
-            self._append_unique(targets, self.default_channel_id)
+            self._append_unique_route(routes, seen_chat_ids, "DEFAULT", self.default_channel_id)
 
-        routed_channel_ids = self.channel_map.get(normalized, [])
-        for channel_id in routed_channel_ids:
-            self._append_unique(targets, channel_id)
+        routed_targets = self.route_targets_by_handle.get(normalized)
+        if routed_targets is None:
+            routed_targets = [
+                TelegramRoute("ROUTE", channel_id)
+                for channel_id in self.channel_map.get(normalized, [])
+            ]
+        for route in routed_targets:
+            self._append_unique_route(routes, seen_chat_ids, route.group_key, route.chat_id)
 
-        if not routed_channel_ids and self.enable_main:
-            self._append_unique(targets, self.main_channel_id)
+        if not routed_targets and self.enable_main:
+            self._append_unique_route(routes, seen_chat_ids, "MAIN", self.main_channel_id)
 
-        return targets
+        return routes
 
     @staticmethod
     def _escape_html(text: str) -> str:
@@ -303,6 +371,36 @@ class TelegramDistributor(BaseDistributor):
         except Exception as e:
             logger.error(f"TG 推送未知异常: {e}")
             return None
+
+    async def send_summary_message(self, chat_id: str, text: str) -> int | None:
+        payload = {
+            "chat_id": chat_id,
+            "text": text[:4096],
+            "parse_mode": "HTML",
+            "link_preview_options": {"is_disabled": True},
+        }
+        result = await self._send_api("sendMessage", payload)
+        if not result or not result.get("ok"):
+            logger.warning(f"AI 摘要发送失败: {chat_id}")
+            return None
+
+        resp_result = result.get("result")
+        if isinstance(resp_result, dict):
+            msg_id = resp_result.get("message_id")
+            return int(msg_id) if msg_id else None
+        return None
+
+    async def pin_message(self, chat_id: str, message_id: int) -> bool:
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "disable_notification": True,
+        }
+        result = await self._send_api("pinChatMessage", payload)
+        ok = bool(result and result.get("ok"))
+        if not ok:
+            logger.warning(f"AI 摘要置顶失败: {chat_id} message_id={message_id}")
+        return ok
 
     async def _translate_and_edit(
         self,
@@ -463,9 +561,11 @@ class TelegramDistributor(BaseDistributor):
 
         handle = message.get("author", {}).get("handle", "?")
         action = message.get("action", "")
-        target_channel_ids = self.resolve_target_channel_ids(handle)
-        if not target_channel_ids:
+        target_routes = self.resolve_target_routes(handle)
+        if not target_routes:
             return
+        self._record_summary_message(message, target_routes)
+        target_channel_ids = [route.chat_id for route in target_routes]
 
         tz_cst = timezone(timedelta(hours=8))
         ts = message.get("timestamp", 0)
@@ -507,6 +607,27 @@ class TelegramDistributor(BaseDistributor):
 
         if edit_tasks:
             await asyncio.gather(*edit_tasks, return_exceptions=True)
+
+    def _record_summary_message(self, message: dict, target_routes: list[TelegramRoute]) -> None:
+        if not self.summary_store or not self.summary_targets_by_chat_id:
+            return
+
+        seen_targets: set[tuple[str, str]] = set()
+        for route in target_routes:
+            summary_target = self.summary_targets_by_chat_id.get(route.chat_id)
+            if not summary_target:
+                continue
+
+            group_key = str(summary_target["group_key"])
+            key = (group_key, route.chat_id)
+            if key in seen_targets:
+                continue
+            seen_targets.add(key)
+
+            try:
+                self.summary_store.insert_message(group_key, route.chat_id, message)
+            except Exception as e:
+                logger.error(f"AI 摘要消息落库失败: {group_key} -> {route.chat_id} - {e}")
 
 
 class DistributorHub:

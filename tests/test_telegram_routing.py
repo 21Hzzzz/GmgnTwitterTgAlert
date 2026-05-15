@@ -77,6 +77,24 @@ class TelegramRoutingTests(unittest.TestCase):
         )
         self.assertEqual(distributor.resolve_target_channel_ids("elonmusk"), ["-100same"])
 
+    def test_route_resolution_preserves_group_keys(self):
+        distributor = TelegramDistributor(
+            bot_token="token",
+            default_channel_id="-100default",
+            enable_default=True,
+            main_channel_id="-100main",
+            enable_main=True,
+            channel_map={"cz_binance": ["-100binance"]},
+            route_targets_by_handle={
+                "cz_binance": [{"group_key": "AD", "chat_id": "-100binance"}],
+            },
+        )
+
+        self.assertEqual(
+            [(route.group_key, route.chat_id) for route in distributor.resolve_target_routes("CZ_BINANCE")],
+            [("DEFAULT", "-100default"), ("AD", "-100binance")],
+        )
+
     def test_filter_handles_blocks_non_allowlisted_handles(self):
         distributor = self.make_distributor(
             channel_map={"cz_binance": ["-100binance"]},
@@ -105,6 +123,22 @@ class CapturingTelegramDistributor(TelegramDistributor):
     async def _send_api(self, endpoint: str, payload: dict) -> dict | None:
         self.last_endpoint = endpoint
         self.last_payload = payload
+        return {"ok": True}
+
+
+class SummaryCapturingTelegramDistributor(TelegramDistributor):
+    def __init__(self):
+        super().__init__(
+            bot_token="token",
+            default_channel_id="-100default",
+            enable_default=True,
+        )
+        self.calls = []
+
+    async def _send_api(self, endpoint: str, payload: dict) -> dict | None:
+        self.calls.append((endpoint, payload))
+        if endpoint == "sendMessage":
+            return {"ok": True, "result": {"message_id": 456}}
         return {"ok": True}
 
 
@@ -185,6 +219,22 @@ class TelegramTranslationEditTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("—— 🇨🇳 中文翻译 ——", edited_text)
         self.assertIn("你好，世界", edited_text)
         self.assertLess(edited_text.index("hello world"), edited_text.index("你好，世界"))
+
+
+class TelegramSummaryPinTests(unittest.IsolatedAsyncioTestCase):
+    async def test_summary_send_then_pin_uses_disable_notification(self):
+        distributor = SummaryCapturingTelegramDistributor()
+
+        message_id = await distributor.send_summary_message("-100main", "<b>摘要</b>")
+        pinned = await distributor.pin_message("-100main", message_id)
+
+        self.assertEqual(message_id, 456)
+        self.assertTrue(pinned)
+        self.assertEqual(distributor.calls[0][0], "sendMessage")
+        self.assertEqual(distributor.calls[0][1]["parse_mode"], "HTML")
+        self.assertEqual(distributor.calls[1][0], "pinChatMessage")
+        self.assertEqual(distributor.calls[1][1]["message_id"], 456)
+        self.assertTrue(distributor.calls[1][1]["disable_notification"])
 
 
 if __name__ == "__main__":
