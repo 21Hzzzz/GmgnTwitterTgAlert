@@ -86,7 +86,8 @@ BINANCE_SQUARE_HANDLES = _parse_handles(os.getenv("BINANCE_SQUARE_HANDLES", ""))
 # ---------- DeepSeek translation ----------
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_TRANSLATION_MODEL = os.getenv("DEEPSEEK_TRANSLATION_MODEL", "").strip() or "deepseek-v4-flash"
+DEEPSEEK_SUMMARY_MODEL = os.getenv("DEEPSEEK_SUMMARY_MODEL", "").strip() or "deepseek-v4-pro"
 
 # ---------- AI scheduled summaries ----------
 AI_SUMMARY_ENABLED = _env_bool("AI_SUMMARY_ENABLED")

@@ -59,7 +59,7 @@ class DeepSeekSummarizer:
             "messages": [_compact_message(row) for row in messages],
         }
         request_body = {
-            "model": config.DEEPSEEK_MODEL,
+            "model": config.DEEPSEEK_SUMMARY_MODEL,
             "messages": [
                 {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},

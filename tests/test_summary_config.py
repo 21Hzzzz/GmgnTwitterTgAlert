@@ -83,6 +83,22 @@ class SummaryConfigTests(unittest.TestCase):
 
         self.assertEqual(config.AI_SUMMARY_TARGETS, [])
 
+    def test_deepseek_model_defaults_and_overrides(self):
+        config = self.load_config({})
+
+        self.assertEqual(config.DEEPSEEK_TRANSLATION_MODEL, "deepseek-v4-flash")
+        self.assertEqual(config.DEEPSEEK_SUMMARY_MODEL, "deepseek-v4-pro")
+
+        config = self.load_config(
+            {
+                "DEEPSEEK_TRANSLATION_MODEL": "custom-translation",
+                "DEEPSEEK_SUMMARY_MODEL": "custom-summary",
+            }
+        )
+
+        self.assertEqual(config.DEEPSEEK_TRANSLATION_MODEL, "custom-translation")
+        self.assertEqual(config.DEEPSEEK_SUMMARY_MODEL, "custom-summary")
+
 
 if __name__ == "__main__":
     unittest.main()

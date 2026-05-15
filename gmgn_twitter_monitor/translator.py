@@ -43,7 +43,7 @@ async def translate_texts(texts_dict: dict[str, str]) -> dict[str, str] | None:
         "Authorization": f"Bearer {config.DEEPSEEK_API_KEY}",
     }
     payload = {
-        "model": config.DEEPSEEK_MODEL,
+        "model": config.DEEPSEEK_TRANSLATION_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(valid_texts, ensure_ascii=False)},
