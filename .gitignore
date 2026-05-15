@@ -14,3 +14,6 @@ monitor_running.png
 *.swp
 
 开发记录.md
+summary.db
+summary.db-wal
+summary.db-shm

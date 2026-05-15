@@ -10,19 +10,6 @@ from loguru import logger
 from . import config
 
 
-SUMMARY_SYSTEM_PROMPT = (
-    "你是加密市场信息流分析助手。你会收到一组来自 GMGN/X 的监控消息 JSON。\n"
-    "目标是从嘈杂聊天中提炼对交易、项目进展、KOL 动向或风险有价值的信息。\n"
-    "请只返回合法 JSON，不要 markdown，不要解释。\n"
-    "返回结构必须为："
-    '{"important":[{"title":"...","reason":"...","source_ids":[1],"confidence":"high|medium|low"}],'
-    '"watchlist":[{"title":"...","reason":"...","source_ids":[1]}],'
-    '"noise_summary":"...","stats":{"useful_count":0,"noise_count":0}}。\n'
-    "important 放高价值信号；watchlist 放需要继续观察但证据不足的内容；"
-    "noise_summary 简短说明被过滤的闲聊类型。source_ids 必须引用输入消息里的 id。"
-)
-
-
 class DeepSeekSummarizer:
     """Generate Chinese Telegram-ready summaries with DeepSeek."""
 
@@ -61,7 +48,7 @@ class DeepSeekSummarizer:
         request_body = {
             "model": config.DEEPSEEK_SUMMARY_MODEL,
             "messages": [
-                {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+                {"role": "system", "content": config.DEEPSEEK_SUMMARY_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
             "stream": False,

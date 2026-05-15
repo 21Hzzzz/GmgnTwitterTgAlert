@@ -99,6 +99,22 @@ class SummaryConfigTests(unittest.TestCase):
         self.assertEqual(config.DEEPSEEK_TRANSLATION_MODEL, "custom-translation")
         self.assertEqual(config.DEEPSEEK_SUMMARY_MODEL, "custom-summary")
 
+    def test_deepseek_prompt_defaults_and_overrides(self):
+        config = self.load_config({})
+
+        self.assertIn("推文翻译器", config.DEEPSEEK_TRANSLATION_PROMPT)
+        self.assertIn("加密市场信息流分析助手", config.DEEPSEEK_SUMMARY_PROMPT)
+
+        config = self.load_config(
+            {
+                "DEEPSEEK_TRANSLATION_PROMPT": "line1\\nline2",
+                "DEEPSEEK_SUMMARY_PROMPT": "summary\\nprompt",
+            }
+        )
+
+        self.assertEqual(config.DEEPSEEK_TRANSLATION_PROMPT, "line1\nline2")
+        self.assertEqual(config.DEEPSEEK_SUMMARY_PROMPT, "summary\nprompt")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,15 +10,6 @@ from loguru import logger
 
 from . import config
 
-SYSTEM_PROMPT = (
-    "你是推文翻译器。用户会输入一段 JSON，包含多个字段（如 content, reference 等）。\n"
-    "请将其中所有的英文或其它外语推文翻译为简体中文，并以严格的 JSON 格式返回，保持原有键名不变。\n"
-    "规则：\n"
-    "1. 只输出翻译结果，不要解释，绝对不要添加任何 markdown 代码块（如 ```json）。\n"
-    "2. 保留原文中的 @用户名、$代币符号、URL 链接和 emoji 不翻译。\n"
-    "3. 如果某段文本已经是中文，或者只是短标点符号（如 `!`、`?` 等），则原样保留它的内容。\n"
-    "4. 返回结果必须是合法的 JSON 对象。"
-)
 
 async def translate_texts(texts_dict: dict[str, str]) -> dict[str, str] | None:
     """调用 DeepSeek API 批量翻译多个文本字段。
@@ -45,7 +36,7 @@ async def translate_texts(texts_dict: dict[str, str]) -> dict[str, str] | None:
     payload = {
         "model": config.DEEPSEEK_TRANSLATION_MODEL,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": config.DEEPSEEK_TRANSLATION_PROMPT},
             {"role": "user", "content": json.dumps(valid_texts, ensure_ascii=False)},
         ],
         "stream": False,

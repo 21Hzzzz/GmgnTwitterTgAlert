@@ -33,6 +33,36 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _env_multiline(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.replace("\\n", "\n")
+
+
+DEFAULT_DEEPSEEK_TRANSLATION_PROMPT = (
+    "你是推文翻译器。用户会输入一段 JSON，包含多个字段（如 content, reference 等）。\n"
+    "请将其中所有的英文或其它外语推文翻译为简体中文，并以严格的 JSON 格式返回，保持原有键名不变。\n"
+    "规则：\n"
+    "1. 只输出翻译结果，不要解释，绝对不要添加任何 markdown 代码块（如 ```json）。\n"
+    "2. 保留原文中的 @用户名、$代币符号、URL 链接和 emoji 不翻译。\n"
+    "3. 如果某段文本已经是中文，或者只是短标点符号（如 `!`、`?` 等），则原样保留它的内容。\n"
+    "4. 返回结果必须是合法的 JSON 对象。"
+)
+
+DEFAULT_DEEPSEEK_SUMMARY_PROMPT = (
+    "你是加密市场信息流分析助手。你会收到一组来自 GMGN/X 的监控消息 JSON。\n"
+    "目标是从嘈杂聊天中提炼对交易、项目进展、KOL 动向或风险有价值的信息。\n"
+    "请只返回合法 JSON，不要 markdown，不要解释。\n"
+    "返回结构必须为："
+    '{"important":[{"title":"...","reason":"...","source_ids":[1],"confidence":"high|medium|low"}],'
+    '"watchlist":[{"title":"...","reason":"...","source_ids":[1]}],'
+    '"noise_summary":"...","stats":{"useful_count":0,"noise_count":0}}。\n'
+    "important 放高价值信号；watchlist 放需要继续观察但证据不足的内容；"
+    "noise_summary 简短说明被过滤的闲聊类型。source_ids 必须引用输入消息里的 id。"
+)
+
+
 LOG_FILE = str(BASE_DIR / "twitter_monitor.log")
 USER_DATA_DIR = str(BASE_DIR / "browser_data")
 SCREENSHOT_PATH = str(BASE_DIR / "monitor_running.png")
@@ -88,6 +118,14 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_TRANSLATION_MODEL = os.getenv("DEEPSEEK_TRANSLATION_MODEL", "").strip() or "deepseek-v4-flash"
 DEEPSEEK_SUMMARY_MODEL = os.getenv("DEEPSEEK_SUMMARY_MODEL", "").strip() or "deepseek-v4-pro"
+DEEPSEEK_TRANSLATION_PROMPT = _env_multiline(
+    "DEEPSEEK_TRANSLATION_PROMPT",
+    DEFAULT_DEEPSEEK_TRANSLATION_PROMPT,
+)
+DEEPSEEK_SUMMARY_PROMPT = _env_multiline(
+    "DEEPSEEK_SUMMARY_PROMPT",
+    DEFAULT_DEEPSEEK_SUMMARY_PROMPT,
+)
 
 # ---------- AI scheduled summaries ----------
 AI_SUMMARY_ENABLED = _env_bool("AI_SUMMARY_ENABLED")

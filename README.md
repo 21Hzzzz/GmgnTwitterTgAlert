@@ -61,6 +61,8 @@ BINANCE_SQUARE_HANDLES=cz,heyi
 DEEPSEEK_API_KEY=
 DEEPSEEK_TRANSLATION_MODEL=deepseek-v4-flash
 DEEPSEEK_SUMMARY_MODEL=deepseek-v4-pro
+DEEPSEEK_TRANSLATION_PROMPT=
+DEEPSEEK_SUMMARY_PROMPT=
 
 AI_SUMMARY_ENABLED=False
 AI_SUMMARY_DB_PATH=
@@ -87,6 +89,7 @@ AI_SUMMARY_INTERVAL_MINUTES_AD=
 - `BINANCE_SQUARE_HANDLES` 用于币安广场等非 Twitter 来源账号；这些账号无法通过 `fxtwitter.com` 生成预览时，程序会改用 GMGN 数据里的原图直链作为 Telegram 大图预览。
 - `DEEPSEEK_TRANSLATION_MODEL` 默认 `deepseek-v4-flash`，用于实时翻译。
 - `DEEPSEEK_SUMMARY_MODEL` 默认 `deepseek-v4-pro`，用于 AI 定时总结。
+- `DEEPSEEK_TRANSLATION_PROMPT` 和 `DEEPSEEK_SUMMARY_PROMPT` 可覆盖默认提示词；留空使用内置默认值，换行可写成 `\n`。
 - `AI_SUMMARY_ENABLED=True` 时启用 AI 定时总结框架，但每个目标群仍需单独开启 `AI_SUMMARY_ENABLE_<GROUP>=True`。
 - `AI_SUMMARY_INTERVAL_MINUTES` 是默认总结窗口；`AI_SUMMARY_INTERVAL_MINUTES_<GROUP>` 可为单个目标群覆盖窗口。
 - 摘要分组 key 为 `DEFAULT`、`MAIN` 或 `TG_ROUTING_<GROUP>` 的 `<GROUP>`，例如 `AI_SUMMARY_ENABLE_AD=True`。
