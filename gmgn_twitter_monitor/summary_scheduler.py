@@ -95,15 +95,17 @@ class SummaryScheduler:
 
         summary_text = await self.summarizer.summarize(messages, window_start, now)
         if not summary_text:
+            error = getattr(self.summarizer, "last_error", None) or "summarizer returned no content"
             self.store.record_run(
                 group_key,
                 chat_id,
-                last_run_at=now,
+                last_run_at=due_base,
                 window_start=window_start,
                 window_end=now,
                 status="failed",
-                error="summarizer returned no content",
+                error=error,
             )
+            logger.warning(f"AI 总结失败，将保留窗口等待重试: {group_key} -> {chat_id} | {error}")
             return
 
         message_id = await self.telegram_client.send_summary_message(chat_id, summary_text)
@@ -111,12 +113,13 @@ class SummaryScheduler:
             self.store.record_run(
                 group_key,
                 chat_id,
-                last_run_at=now,
+                last_run_at=due_base,
                 window_start=window_start,
                 window_end=now,
                 status="failed",
                 error="telegram sendMessage failed",
             )
+            logger.warning(f"AI 总结发送失败，将保留窗口等待重试: {group_key} -> {chat_id}")
             return
 
         pinned = await self.telegram_client.pin_message(chat_id, message_id)

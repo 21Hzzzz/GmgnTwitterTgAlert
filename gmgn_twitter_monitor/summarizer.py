@@ -13,20 +13,27 @@ from . import config
 class DeepSeekSummarizer:
     """Generate Chinese Telegram-ready summaries with DeepSeek."""
 
+    def __init__(self):
+        self.last_error: str | None = None
+
     async def summarize(
         self,
         messages: list[dict[str, Any]],
         window_start: int,
         window_end: int,
     ) -> str | None:
+        self.last_error = None
         if not config.DEEPSEEK_API_KEY:
-            logger.warning("AI 定时总结已开启，但 DEEPSEEK_API_KEY 未配置")
+            self.last_error = "DEEPSEEK_API_KEY is not configured"
+            logger.warning(f"AI 定时总结已开启，但 {self.last_error}")
             return None
         if not messages:
             return None
 
         result = await self._call_deepseek(messages, window_start, window_end)
         if result is None:
+            if not self.last_error:
+                self.last_error = "invalid or empty DeepSeek response"
             return None
         return format_summary_html(result, messages, window_start, window_end)
 
@@ -57,7 +64,10 @@ class DeepSeekSummarizer:
             "response_format": {"type": "json_object"},
         }
 
-        for attempt in range(1, 3):
+        max_retries = max(1, config.AI_SUMMARY_MAX_RETRIES)
+        timeout_seconds = max(1, config.AI_SUMMARY_TIMEOUT_SECONDS)
+
+        for attempt in range(1, max_retries + 1):
             try:
                 connector = None
                 if config.PROXY_SERVER:
@@ -65,7 +75,7 @@ class DeepSeekSummarizer:
 
                     connector = ProxyConnector.from_url(config.PROXY_SERVER, rdns=True)
 
-                timeout = aiohttp.ClientTimeout(total=60)
+                timeout = aiohttp.ClientTimeout(total=timeout_seconds)
                 async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
                     async with session.post(
                         f"{config.DEEPSEEK_BASE_URL}/chat/completions",
@@ -74,8 +84,9 @@ class DeepSeekSummarizer:
                     ) as resp:
                         if resp.status != 200:
                             body = await resp.text()
+                            self.last_error = f"DeepSeek HTTP {resp.status}: {body[:200]}"
                             logger.error(f"AI 总结失败 [{resp.status}]: {body[:200]}")
-                            if resp.status >= 500 and attempt < 2:
+                            if resp.status >= 500 and attempt < max_retries:
                                 await asyncio.sleep(2)
                                 continue
                             return None
@@ -84,15 +95,18 @@ class DeepSeekSummarizer:
                         content = data["choices"][0]["message"]["content"].strip()
                         return _parse_json_object(content)
             except asyncio.TimeoutError:
-                logger.warning(f"AI 总结超时 (第 {attempt} 次尝试)")
-                if attempt < 2:
+                self.last_error = f"timeout after {timeout_seconds}s on attempt {attempt}/{max_retries}"
+                logger.warning(f"AI 总结超时 (第 {attempt}/{max_retries} 次尝试, {timeout_seconds}s)")
+                if attempt < max_retries:
                     continue
             except aiohttp.ClientError as e:
-                logger.warning(f"AI 总结网络异常 (第 {attempt} 次尝试): {e}")
-                if attempt < 2:
+                self.last_error = f"network error on attempt {attempt}/{max_retries}: {e}"
+                logger.warning(f"AI 总结网络异常 (第 {attempt}/{max_retries} 次尝试): {e}")
+                if attempt < max_retries:
                     await asyncio.sleep(1)
                     continue
             except Exception as e:
+                self.last_error = f"unexpected error: {repr(e)}"
                 logger.error(f"AI 总结发生预期外错误: {repr(e)}")
                 return None
 

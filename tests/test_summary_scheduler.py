@@ -8,8 +8,9 @@ from gmgn_twitter_monitor.summary_store import SummaryStore
 
 
 class FakeSummarizer:
-    def __init__(self, text: str | None):
+    def __init__(self, text: str | None, last_error: str | None = None):
         self.text = text
+        self.last_error = last_error
         self.calls = []
 
     async def summarize(self, messages, window_start, window_end):
@@ -65,7 +66,9 @@ class SummarySchedulerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(summarizer.calls), 1)
             self.assertEqual(telegram.sent, [("-100ad", "<b>summary</b>")])
             self.assertEqual(telegram.pinned, [("-100ad", 123)])
-            self.assertEqual(store.get_run("AD", "-100ad")["status"], "sent")
+            run = store.get_run("AD", "-100ad")
+            self.assertEqual(run["status"], "sent")
+            self.assertEqual(run["last_run_at"], 1_800)
 
     async def test_empty_window_records_empty_without_sending(self):
         with tempfile.TemporaryDirectory(dir=os.getcwd()) as tmpdir:
@@ -110,14 +113,17 @@ class SummarySchedulerTests(unittest.IsolatedAsyncioTestCase):
                 store,
                 [{"group_key": "MAIN", "chat_id": "-100main", "interval_minutes": 30}],
                 telegram,
-                summarizer=FakeSummarizer(None),
+                summarizer=FakeSummarizer(None, last_error="timeout after 120s"),
                 started_at=0,
             )
 
             await scheduler.run_once(now=1_800)
 
             self.assertEqual(telegram.sent, [])
-            self.assertEqual(store.get_run("MAIN", "-100main")["status"], "failed")
+            run = store.get_run("MAIN", "-100main")
+            self.assertEqual(run["status"], "failed")
+            self.assertEqual(run["last_run_at"], 0)
+            self.assertEqual(run["error"], "timeout after 120s")
 
 
 if __name__ == "__main__":

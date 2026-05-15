@@ -131,6 +131,8 @@ DEEPSEEK_SUMMARY_PROMPT = _env_multiline(
 AI_SUMMARY_ENABLED = _env_bool("AI_SUMMARY_ENABLED")
 AI_SUMMARY_DB_PATH = os.getenv("AI_SUMMARY_DB_PATH", "").strip() or str(BASE_DIR / "summary.db")
 AI_SUMMARY_INTERVAL_MINUTES = _env_int("AI_SUMMARY_INTERVAL_MINUTES", 30)
+AI_SUMMARY_TIMEOUT_SECONDS = _env_int("AI_SUMMARY_TIMEOUT_SECONDS", 120)
+AI_SUMMARY_MAX_RETRIES = _env_int("AI_SUMMARY_MAX_RETRIES", 3)
 
 
 def _summary_group_enabled(group_key: str) -> bool:

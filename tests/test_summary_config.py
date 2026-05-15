@@ -52,6 +52,22 @@ class SummaryConfigTests(unittest.TestCase):
             ],
         )
 
+    def test_summary_retry_defaults_and_overrides(self):
+        config = self.load_config({})
+
+        self.assertEqual(config.AI_SUMMARY_TIMEOUT_SECONDS, 120)
+        self.assertEqual(config.AI_SUMMARY_MAX_RETRIES, 3)
+
+        config = self.load_config(
+            {
+                "AI_SUMMARY_TIMEOUT_SECONDS": "180",
+                "AI_SUMMARY_MAX_RETRIES": "4",
+            }
+        )
+
+        self.assertEqual(config.AI_SUMMARY_TIMEOUT_SECONDS, 180)
+        self.assertEqual(config.AI_SUMMARY_MAX_RETRIES, 4)
+
     def test_summary_targets_dedupe_same_chat_id(self):
         config = self.load_config(
             {
