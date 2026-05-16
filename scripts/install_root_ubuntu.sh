@@ -107,6 +107,7 @@ cat <<EOF
   4. 重启并重新读取 .env：gta restart
   5. 查看状态和实时日志：gta status
   6. 更新代码和依赖：gta update
+  7. 卸载并删除项目相关文件：gta uninstall
 
 可选 WARP 代理：
   gta warp

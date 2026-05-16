@@ -68,6 +68,14 @@ def _run(
     return subprocess.run(full_cmd, cwd=cwd, env=env, check=False).returncode
 
 
+def _run_plain(cmd: list[str]) -> int:
+    return subprocess.run(cmd, check=False).returncode
+
+
+def _keep_first_error(current: int, next_rc: int) -> int:
+    return current if current != 0 else next_rc
+
+
 def _capture(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         cmd,
@@ -253,6 +261,77 @@ def do_disable() -> int:
     return _run(["systemctl", "disable", SERVICE_NAME])
 
 
+def _confirm_uninstall() -> bool:
+    if not sys.stdin.isatty():
+        print("卸载命令需要交互式终端确认，非交互式环境已拒绝执行。")
+        return False
+
+    print("即将卸载 GMGN Twitter Monitor，并删除以下内容：")
+    print(f"  - systemd 服务: /etc/systemd/system/{SERVICE_NAME}")
+    print(f"  - gta 快捷命令: {GTA_BIN}")
+    print(f"  - 项目目录及所有数据: {PROJECT_DIR}")
+    print("")
+    print("这会删除 .env、browser_data、summary.db、日志、虚拟环境和仓库文件。")
+    answer = input("确认卸载请输入 DELETE: ").strip()
+    return answer == "DELETE"
+
+
+def _project_dir_safe_to_delete() -> bool:
+    resolved = PROJECT_DIR.resolve()
+    if not resolved.is_absolute() or str(resolved) in {"/", "/root", "/home"}:
+        print(f"拒绝删除危险路径：{resolved}")
+        return False
+    if resolved.name != "GmgnTwitterTgAlert":
+        print(f"拒绝删除非项目目录：{resolved}")
+        return False
+    if not (resolved / "ctl.py").exists() or not (resolved / "gmgn_twitter_monitor").is_dir():
+        print(f"拒绝删除无法识别为本项目的目录：{resolved}")
+        return False
+    return True
+
+
+def do_uninstall() -> int:
+    if not _confirm_uninstall():
+        print("已取消卸载。")
+        return 1
+
+    rc = 0
+    print("正在停止并取消开机自启...")
+    rc = _keep_first_error(rc, _run(["systemctl", "stop", SERVICE_NAME]))
+    rc = _keep_first_error(rc, _run(["systemctl", "disable", SERVICE_NAME]))
+
+    print("正在删除 systemd 服务文件...")
+    rc = _keep_first_error(rc, _run(["rm", "-f", f"/etc/systemd/system/{SERVICE_NAME}"]))
+    rc = _keep_first_error(rc, _run(["systemctl", "daemon-reload"]))
+    rc = _keep_first_error(rc, _run(["systemctl", "reset-failed", SERVICE_NAME]))
+
+    print("正在删除 gta 快捷命令...")
+    rc = _keep_first_error(rc, _run(["rm", "-f", str(GTA_BIN)]))
+
+    if PROJECT_DIR.exists():
+        if not _project_dir_safe_to_delete():
+            return 1
+        print(f"正在删除项目目录: {PROJECT_DIR}")
+        if _is_root():
+            rc = _keep_first_error(
+                rc,
+                _run_plain(["rm", "-rf", "--one-file-system", str(PROJECT_DIR)]),
+            )
+        else:
+            rc = _keep_first_error(
+                rc,
+                _run(["rm", "-rf", "--one-file-system", str(PROJECT_DIR)]),
+            )
+    else:
+        print(f"项目目录不存在，跳过: {PROJECT_DIR}")
+
+    if rc == 0:
+        print("卸载完成。")
+    else:
+        print(f"卸载过程中有命令失败，退出码：{rc}")
+    return rc
+
+
 COMMANDS = {
     "start": do_start,
     "stop": do_stop,
@@ -265,6 +344,8 @@ COMMANDS = {
     "install-warp": do_warp,
     "enable": do_enable,
     "disable": do_disable,
+    "uninstall": do_uninstall,
+    "remove": do_uninstall,
 }
 
 
@@ -281,6 +362,7 @@ def print_help() -> None:
         "  warp          安装可选的 Cloudflare WARP 本地代理\n"
         "  enable        设置开机自启\n"
         "  disable       取消开机自启\n"
+        "  uninstall     卸载服务并删除项目目录、配置、缓存和 gta 命令\n"
     )
 
 

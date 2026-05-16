@@ -107,6 +107,7 @@ gta stop
 gta restart
 gta status
 gta update
+gta uninstall
 ```
 
 - `gta start`：启动服务。每次都会询问是否首次登录；如果选择 `y`，粘贴 GMGN 授权 URL，程序会先写入浏览器登录缓存，然后再启动服务。
@@ -114,6 +115,7 @@ gta update
 - `gta restart`：重启服务，并通过进程重启重新读取 `.env`。
 - `gta status`：先显示 systemd 状态，再进入实时日志跟踪；按 `Ctrl+C` 退出。
 - `gta update`：自动拉取最新代码、刷新依赖、刷新 systemd service 和 `gta` 命令；不会自动重启服务。
+- `gta uninstall`：停止并取消开机自启，删除 systemd 服务、`/usr/local/bin/gta`、项目目录及其中的 `.env`、浏览器缓存、SQLite 数据库、日志和虚拟环境；执行前需要输入 `DELETE` 确认。
 
 `gta update` 如果检测到 tracked 本地改动，会停止并提示你手动处理，避免覆盖服务器上的修改。
 
