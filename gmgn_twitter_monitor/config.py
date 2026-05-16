@@ -74,6 +74,11 @@ SCREENSHOT_PATH = str(BASE_DIR / "monitor_running.png")
 FIRST_LOGIN_SCREENSHOT_PATH = str(BASE_DIR / "first_login_after_auth.png")
 MONITOR_URL = "https://gmgn.ai/follow?target=xTracker&chain=bsc"
 PROXY_SERVER = os.getenv("PROXY_SERVER", "").strip()
+BROWSER_LOCALE = os.getenv("BROWSER_LOCALE", "zh-CN").strip() or "zh-CN"
+BROWSER_ACCEPT_LANGUAGE = (
+    os.getenv("BROWSER_ACCEPT_LANGUAGE", f"{BROWSER_LOCALE},zh;q=0.9,en;q=0.8").strip()
+    or f"{BROWSER_LOCALE},zh;q=0.9,en;q=0.8"
+)
 WATCHDOG_TIMEOUT = 120
 WATCHDOG_POLL_INTERVAL = 5
 XVFB_WIDTH = 1920

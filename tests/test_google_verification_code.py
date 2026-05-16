@@ -18,6 +18,32 @@ class GoogleVerificationCodeTests(unittest.TestCase):
 
 
 class FirstLoginFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_launch_sets_chinese_browser_locale(self):
+        captured_options = {}
+        page = object()
+
+        class FakeContext:
+            pages = [page]
+
+        class FakeChromium:
+            async def launch_persistent_context(self, **kwargs):
+                captured_options.update(kwargs)
+                return FakeContext()
+
+        class FakePlaywright:
+            chromium = FakeChromium()
+
+        manager = BrowserManager()
+        returned_page = await manager.launch(FakePlaywright())
+
+        self.assertIs(returned_page, page)
+        self.assertEqual(captured_options["locale"], "zh-CN")
+        self.assertEqual(
+            captured_options["extra_http_headers"]["Accept-Language"],
+            "zh-CN,zh;q=0.9,en;q=0.8",
+        )
+        self.assertIn("--lang=zh-CN", captured_options["args"])
+
     async def test_waits_before_checking_google_verification(self):
         events = []
 
@@ -87,6 +113,49 @@ class FirstLoginFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[1][0], "evaluate")
         self.assertIn("document.activeElement", events[1][2])
         self.assertEqual(events[2], ("type", "123456", {"delay": 50}))
+
+    async def test_confirm_click_uses_next_visible_candidate(self):
+        events = []
+
+        class FakeButton:
+            def __init__(self, index, visible):
+                self.index = index
+                self.visible = visible
+
+            async def is_visible(self, **kwargs):
+                return self.visible
+
+            async def is_enabled(self, **kwargs):
+                return True
+
+            async def click(self, **kwargs):
+                events.append(("click", self.index, kwargs))
+
+        class FakeLocator:
+            def __init__(self, buttons):
+                self.buttons = buttons
+
+            async def count(self):
+                return len(self.buttons)
+
+            def nth(self, index):
+                return self.buttons[index]
+
+        class FakeScope:
+            def __init__(self, buttons):
+                self.buttons = buttons
+
+            def locator(self, selector):
+                events.append(("selector", selector))
+                return FakeLocator(self.buttons)
+
+        manager = BrowserManager()
+        manager.page = FakeScope([FakeButton(0, False), FakeButton(1, True)])
+        dialog = FakeScope([])
+
+        await manager._click_google_verification_confirm(dialog)
+
+        self.assertEqual(events[-1], ("click", 1, {"timeout": 5000, "force": True}))
 
 
 if __name__ == "__main__":

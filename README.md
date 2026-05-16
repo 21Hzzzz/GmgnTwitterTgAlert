@@ -43,6 +43,8 @@ nano /root/GmgnTwitterTgAlert/.env
 
 ```env
 PROXY_SERVER=
+BROWSER_LOCALE=zh-CN
+BROWSER_ACCEPT_LANGUAGE=zh-CN,zh;q=0.9,en;q=0.8
 
 TG_BOT_TOKEN=123456789:your-token
 
@@ -135,6 +137,7 @@ gta start
    - 如果 GMGN 弹出“谷歌身份验证”窗口，终端会继续提示输入 6 位动态验证码；输入后程序会自动填入并点击确认。
 
 授权链接不再写入 `.env`，也不需要额外配置首次登录开关。
+浏览器默认以 `zh-CN` 启动，避免服务器 Chromium 默认英文导致 GMGN 弹窗文案和按钮选择器不一致。
 
 ## 可选 WARP 代理
 

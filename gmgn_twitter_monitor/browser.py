@@ -27,13 +27,22 @@ class BrowserManager:
         launch_options: Dict[str, Any] = {
             "user_data_dir": config.USER_DATA_DIR,
             "headless": False,
+            "locale": config.BROWSER_LOCALE,
+            "extra_http_headers": {
+                "Accept-Language": config.BROWSER_ACCEPT_LANGUAGE,
+            },
             "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
+                f"--lang={config.BROWSER_LOCALE}",
                 "--window-size=1920,1080",
                 "--start-maximized",
             ],
         }
+        logger.info(
+            f"浏览器语言已设置: locale={config.BROWSER_LOCALE}, "
+            f"Accept-Language={config.BROWSER_ACCEPT_LANGUAGE}"
+        )
         if config.PROXY_SERVER:
             launch_options["proxy"] = {"server": config.PROXY_SERVER}
             logger.info(f"浏览器代理已启用: {config.PROXY_SERVER}")
@@ -72,8 +81,6 @@ class BrowserManager:
     async def _find_google_verification_dialog(self) -> Locator | None:
         page = self._require_page()
         selectors = [
-            "xpath=//*[contains(normalize-space(text()), '谷歌身份验证')]/ancestor-or-self::*[.//input][1]",
-            "xpath=//*[contains(normalize-space(text()), '6 位验证码')]/ancestor-or-self::*[.//input][1]",
             "section[role='dialog']:has-text('谷歌身份验证')",
             "section[role='dialog']:has-text('请输入谷歌身份验证器上的 6 位验证码')",
             "section[role='dialog']:has(input.chakra-pin-input)",
@@ -98,6 +105,8 @@ class BrowserManager:
             ".chakra-modal__body:has-text('6 位验证码')",
             ".chakra-modal__body:has(input.chakra-pin-input)",
             ".chakra-modal__body:has(input[id^='pin-input-'])",
+            "xpath=//*[contains(normalize-space(text()), '谷歌身份验证')]/ancestor-or-self::*[.//input][1]",
+            "xpath=//*[contains(normalize-space(text()), '6 位验证码')]/ancestor-or-self::*[.//input][1]",
         ]
         for selector in selectors:
             try:
@@ -164,21 +173,96 @@ class BrowserManager:
     async def _click_google_verification_confirm(self, dialog: Locator) -> None:
         page = self._require_page()
         confirm_selectors = [
+            "footer button:has-text('确认')",
+            ".chakra-modal__footer button:has-text('确认')",
+            "button:has(span:has-text('确认'))",
             "button:has-text('确认')",
             "[role='button']:has-text('确认')",
+            "footer button:has-text('Confirm')",
+            ".chakra-modal__footer button:has-text('Confirm')",
+            "button:has(span:has-text('Confirm'))",
             "button:has-text('Confirm')",
             "[role='button']:has-text('Confirm')",
         ]
-        for selector in confirm_selectors:
-            for scope in (dialog, page):
-                try:
-                    button = scope.locator(selector).first
-                    if await button.is_visible(timeout=500):
-                        await button.click(timeout=5000)
-                        return
-                except Exception:
-                    continue
+        for scope in (dialog, page):
+            for selector in confirm_selectors:
+                if await self._click_visible_candidate(scope.locator(selector)):
+                    return
+
+        if await self._click_confirm_button_with_script():
+            return
+
         raise RuntimeError("检测到谷歌身份验证弹窗，但没有找到确认按钮")
+
+    async def _click_visible_candidate(self, locator: Locator, max_candidates: int = 10) -> bool:
+        try:
+            count = min(await locator.count(), max_candidates)
+        except Exception:
+            count = 1
+
+        for index in range(count):
+            candidate = locator.nth(index)
+            try:
+                if not await candidate.is_visible(timeout=500):
+                    continue
+                try:
+                    if not await candidate.is_enabled(timeout=500):
+                        continue
+                except Exception:
+                    pass
+                await candidate.click(timeout=5000, force=True)
+                return True
+            except Exception as e:
+                logger.debug(f"验证码确认按钮候选点击失败，继续尝试下一个: {e}")
+                continue
+        return False
+
+    async def _click_confirm_button_with_script(self) -> bool:
+        page = self._require_page()
+        try:
+            return bool(
+                await page.evaluate(
+                    """
+                    () => {
+                        const roots = [
+                            ...document.querySelectorAll("section[role='dialog'], [role='dialog'], .chakra-modal__content")
+                        ].filter((root) => {
+                            const text = root.innerText || "";
+                            return (
+                                text.includes("谷歌身份验证") ||
+                                text.includes("6 位验证码") ||
+                                root.querySelector("input.chakra-pin-input, input[id^='pin-input-']")
+                            );
+                        });
+                        for (const root of roots) {
+                            const buttons = Array.from(root.querySelectorAll("button, [role='button']"));
+                            const button = buttons.find((candidate) => {
+                                const text = (candidate.innerText || candidate.textContent || "").trim();
+                                const style = window.getComputedStyle(candidate);
+                                const rect = candidate.getBoundingClientRect();
+                                return (
+                                    (text.includes("确认") || text.includes("Confirm")) &&
+                                    style.display !== "none" &&
+                                    style.visibility !== "hidden" &&
+                                    rect.width > 0 &&
+                                    rect.height > 0 &&
+                                    !candidate.disabled &&
+                                    candidate.getAttribute("aria-disabled") !== "true"
+                                );
+                            });
+                            if (button) {
+                                button.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                    """
+                )
+            )
+        except Exception as e:
+            logger.debug(f"验证码确认按钮脚本兜底失败: {e}")
+            return False
 
     async def _handle_google_verification_if_present(
         self,
