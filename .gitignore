@@ -5,6 +5,7 @@ _run_*.py
 ctl_git_release.py
 browser_data/
 monitor_running.png
+first_login_after_auth.png
 .env
 
 # IDE & OS

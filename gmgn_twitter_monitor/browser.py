@@ -62,6 +62,7 @@ class BrowserManager:
         await page.goto(auth_url, wait_until="domcontentloaded", timeout=60000)
         logger.info("授权页面已加载，等待 15 秒让登录状态和验证码弹窗稳定...")
         await page.wait_for_timeout(15000)
+        await self.save_first_login_screenshot()
         logger.info("开始检查是否需要谷歌身份验证码...")
         await self._handle_google_verification_if_present(verification_code_provider)
         logger.info("等待 15 秒写入浏览器登录状态...")
@@ -75,16 +76,28 @@ class BrowserManager:
             "xpath=//*[contains(normalize-space(text()), '6 位验证码')]/ancestor-or-self::*[.//input][1]",
             "section[role='dialog']:has-text('谷歌身份验证')",
             "section[role='dialog']:has-text('请输入谷歌身份验证器上的 6 位验证码')",
+            "section[role='dialog']:has(input.chakra-pin-input)",
+            "section[role='dialog']:has(input[id^='pin-input-'])",
+            "section[role='dialog']:has(input[aria-label='Please enter your pin code'])",
             "[role='dialog']:has-text('谷歌身份验证')",
             "[role='dialog']:has-text('6 位验证码')",
+            "[role='dialog']:has(input.chakra-pin-input)",
+            "[role='dialog']:has(input[id^='pin-input-'])",
+            "[role='dialog']:has(input[aria-label='Please enter your pin code'])",
             ".pi-modal-wrap:has-text('谷歌身份验证')",
             ".pi-modal-wrap:has-text('6 位验证码')",
             ".chakra-modal__content-container:has-text('谷歌身份验证')",
             ".chakra-modal__content-container:has-text('6 位验证码')",
+            ".chakra-modal__content-container:has(input.chakra-pin-input)",
+            ".chakra-modal__content-container:has(input[id^='pin-input-'])",
             ".chakra-modal__content:has-text('谷歌身份验证')",
             ".chakra-modal__content:has-text('6 位验证码')",
+            ".chakra-modal__content:has(input.chakra-pin-input)",
+            ".chakra-modal__content:has(input[id^='pin-input-'])",
             ".chakra-modal__body:has-text('谷歌身份验证')",
             ".chakra-modal__body:has-text('6 位验证码')",
+            ".chakra-modal__body:has(input.chakra-pin-input)",
+            ".chakra-modal__body:has(input[id^='pin-input-'])",
         ]
         for selector in selectors:
             try:
@@ -346,6 +359,14 @@ class BrowserManager:
         page = self._require_page()
         await page.screenshot(path=config.SCREENSHOT_PATH)
         logger.info(f"运行截图已保存: {config.SCREENSHOT_PATH}")
+
+    async def save_first_login_screenshot(self):
+        page = self._require_page()
+        try:
+            await page.screenshot(path=config.FIRST_LOGIN_SCREENSHOT_PATH)
+            logger.info(f"首次登录调试截图已保存: {config.FIRST_LOGIN_SCREENSHOT_PATH}")
+        except Exception as e:
+            logger.warning(f"首次登录调试截图保存失败，已忽略: {e}")
 
     async def recover_after_timeout(self):
         page = self._require_page()

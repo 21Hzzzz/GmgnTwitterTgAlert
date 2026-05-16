@@ -28,6 +28,9 @@ class FirstLoginFlowTests(unittest.IsolatedAsyncioTestCase):
             async def wait_for_timeout(self, timeout_ms):
                 events.append(("wait", timeout_ms))
 
+            async def screenshot(self, **kwargs):
+                events.append(("screenshot", kwargs))
+
         manager = BrowserManager()
         manager.page = FakePage()
 
@@ -41,8 +44,10 @@ class FirstLoginFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(events[0][0], "goto")
         self.assertEqual(events[1], ("wait", 15000))
-        self.assertEqual(events[2], ("check_google_verification", provider))
-        self.assertEqual(events[3], ("wait", 15000))
+        self.assertEqual(events[2][0], "screenshot")
+        self.assertTrue(events[2][1]["path"].endswith("first_login_after_auth.png"))
+        self.assertEqual(events[3], ("check_google_verification", provider))
+        self.assertEqual(events[4], ("wait", 15000))
 
     async def test_types_pin_code_from_first_visible_input(self):
         events = []

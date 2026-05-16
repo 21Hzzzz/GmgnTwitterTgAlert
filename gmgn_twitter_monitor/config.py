@@ -71,6 +71,7 @@ DEFAULT_DEEPSEEK_SUMMARY_PROMPT = (
 LOG_FILE = str(BASE_DIR / "twitter_monitor.log")
 USER_DATA_DIR = str(BASE_DIR / "browser_data")
 SCREENSHOT_PATH = str(BASE_DIR / "monitor_running.png")
+FIRST_LOGIN_SCREENSHOT_PATH = str(BASE_DIR / "first_login_after_auth.png")
 MONITOR_URL = "https://gmgn.ai/follow?target=xTracker&chain=bsc"
 PROXY_SERVER = os.getenv("PROXY_SERVER", "").strip()
 WATCHDOG_TIMEOUT = 120
