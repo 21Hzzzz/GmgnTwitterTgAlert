@@ -131,28 +131,35 @@ class BrowserManager:
         return visible_inputs
 
     async def _fill_google_verification_code(self, dialog: Locator, code: str) -> None:
-        page = self._require_page()
         visible_inputs = await self._visible_inputs(dialog)
         if len(visible_inputs) >= 6:
-            for input_locator in visible_inputs[:6]:
-                await input_locator.fill("", timeout=1000)
-            await visible_inputs[0].click(timeout=3000)
-            await page.keyboard.type(code, delay=50)
+            await self._focus_input_and_type(visible_inputs[0], code)
             return
 
         if visible_inputs:
-            await visible_inputs[0].fill("", timeout=1000)
-            await visible_inputs[0].click(timeout=3000)
-            await page.keyboard.type(code, delay=50)
+            await self._focus_input_and_type(visible_inputs[0], code)
             return
 
         first_textbox = dialog.locator("[role='textbox'], [contenteditable='true']").first
         if await first_textbox.is_visible(timeout=500):
-            await first_textbox.click(timeout=3000)
-            await page.keyboard.type(code, delay=50)
+            await self._focus_input_and_type(first_textbox, code)
             return
 
         raise RuntimeError("检测到谷歌身份验证弹窗，但没有找到可输入验证码的位置")
+
+    async def _focus_input_and_type(self, input_locator: Locator, text: str) -> None:
+        page = self._require_page()
+        try:
+            await input_locator.click(timeout=5000, force=True)
+        except Exception as e:
+            logger.debug(f"验证码输入框点击失败，尝试直接聚焦: {e}")
+            await input_locator.evaluate("(element) => element.focus()")
+
+        focused = await input_locator.evaluate("(element) => document.activeElement === element")
+        if not focused:
+            await input_locator.evaluate("(element) => element.focus()")
+
+        await page.keyboard.type(text, delay=50)
 
     async def _click_google_verification_confirm(self, dialog: Locator) -> None:
         page = self._require_page()

@@ -63,11 +63,12 @@ class FirstLoginFlowTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self, index):
                 self.index = index
 
-            async def fill(self, text, **kwargs):
-                events.append(("fill", self.index, text, kwargs))
-
             async def click(self, **kwargs):
                 events.append(("click", self.index, kwargs))
+
+            async def evaluate(self, script):
+                events.append(("evaluate", self.index, script))
+                return True
 
         manager = BrowserManager()
         manager.page = FakePage()
@@ -80,17 +81,12 @@ class FirstLoginFlowTests(unittest.IsolatedAsyncioTestCase):
 
         await manager._fill_google_verification_code(object(), "123456")
 
-        self.assertEqual([event[:3] for event in events[:6]], [
-            ("fill", 0, ""),
-            ("fill", 1, ""),
-            ("fill", 2, ""),
-            ("fill", 3, ""),
-            ("fill", 4, ""),
-            ("fill", 5, ""),
-        ])
-        self.assertEqual(events[6][0], "click")
-        self.assertEqual(events[6][1], 0)
-        self.assertEqual(events[7], ("type", "123456", {"delay": 50}))
+        self.assertEqual(events[0][0], "click")
+        self.assertEqual(events[0][1], 0)
+        self.assertEqual(events[0][2], {"timeout": 5000, "force": True})
+        self.assertEqual(events[1][0], "evaluate")
+        self.assertIn("document.activeElement", events[1][2])
+        self.assertEqual(events[2], ("type", "123456", {"delay": 50}))
 
 
 if __name__ == "__main__":
