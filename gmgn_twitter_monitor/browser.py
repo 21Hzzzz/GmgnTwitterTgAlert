@@ -60,7 +60,9 @@ class BrowserManager:
         page = self._require_page()
         logger.info("已进入首次登录模式，正在打开 GMGN 授权页面...")
         await page.goto(auth_url, wait_until="domcontentloaded", timeout=60000)
-        logger.info("授权页面已加载，正在检查是否需要谷歌身份验证码...")
+        logger.info("授权页面已加载，等待 15 秒让登录状态和验证码弹窗稳定...")
+        await page.wait_for_timeout(15000)
+        logger.info("开始检查是否需要谷歌身份验证码...")
         await self._handle_google_verification_if_present(verification_code_provider)
         logger.info("等待 15 秒写入浏览器登录状态...")
         await page.wait_for_timeout(15000)
@@ -71,12 +73,18 @@ class BrowserManager:
         selectors = [
             "xpath=//*[contains(normalize-space(text()), '谷歌身份验证')]/ancestor-or-self::*[.//input][1]",
             "xpath=//*[contains(normalize-space(text()), '6 位验证码')]/ancestor-or-self::*[.//input][1]",
+            "section[role='dialog']:has-text('谷歌身份验证')",
+            "section[role='dialog']:has-text('请输入谷歌身份验证器上的 6 位验证码')",
             "[role='dialog']:has-text('谷歌身份验证')",
             "[role='dialog']:has-text('6 位验证码')",
             ".pi-modal-wrap:has-text('谷歌身份验证')",
             ".pi-modal-wrap:has-text('6 位验证码')",
             ".chakra-modal__content-container:has-text('谷歌身份验证')",
             ".chakra-modal__content-container:has-text('6 位验证码')",
+            ".chakra-modal__content:has-text('谷歌身份验证')",
+            ".chakra-modal__content:has-text('6 位验证码')",
+            ".chakra-modal__body:has-text('谷歌身份验证')",
+            ".chakra-modal__body:has-text('6 位验证码')",
         ]
         for selector in selectors:
             try:
@@ -113,12 +121,16 @@ class BrowserManager:
         page = self._require_page()
         visible_inputs = await self._visible_inputs(dialog)
         if len(visible_inputs) >= 6:
-            for digit, input_locator in zip(code, visible_inputs[:6]):
-                await input_locator.fill(digit, timeout=3000)
+            for input_locator in visible_inputs[:6]:
+                await input_locator.fill("", timeout=1000)
+            await visible_inputs[0].click(timeout=3000)
+            await page.keyboard.type(code, delay=50)
             return
 
         if visible_inputs:
-            await visible_inputs[0].fill(code, timeout=3000)
+            await visible_inputs[0].fill("", timeout=1000)
+            await visible_inputs[0].click(timeout=3000)
+            await page.keyboard.type(code, delay=50)
             return
 
         first_textbox = dialog.locator("[role='textbox'], [contenteditable='true']").first
