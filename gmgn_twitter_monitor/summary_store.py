@@ -62,10 +62,12 @@ class SummaryStore:
                     status TEXT NOT NULL,
                     message_id INTEGER,
                     error TEXT,
+                    last_message_id INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (group_key, chat_id)
                 )
                 """
             )
+            self._ensure_summary_runs_column(conn, "last_message_id", "INTEGER NOT NULL DEFAULT 0")
 
     def insert_message(
         self,
@@ -146,6 +148,52 @@ class SummaryStore:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def fetch_messages_by_id_range(
+        self,
+        group_key: str,
+        chat_id: str,
+        after_id: int,
+        until_id: int,
+    ) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    id,
+                    group_key,
+                    chat_id,
+                    internal_id,
+                    tweet_id,
+                    author_handle,
+                    action,
+                    received_at,
+                    tweet_timestamp,
+                    content_text,
+                    reference_text,
+                    message_json
+                FROM summary_messages
+                WHERE group_key = ?
+                  AND chat_id = ?
+                  AND id > ?
+                  AND id <= ?
+                ORDER BY id ASC
+                """,
+                (group_key, chat_id, after_id, until_id),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_max_message_id(self, group_key: str, chat_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COALESCE(MAX(id), 0) AS max_id
+                FROM summary_messages
+                WHERE group_key = ? AND chat_id = ?
+                """,
+                (group_key, chat_id),
+            ).fetchone()
+            return int(row["max_id"]) if row else 0
+
     def get_last_run_at(self, group_key: str, chat_id: str) -> int | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -158,11 +206,32 @@ class SummaryStore:
             ).fetchone()
             return int(row["last_run_at"]) if row else None
 
+    def get_last_message_id(self, group_key: str, chat_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT last_message_id
+                FROM summary_runs
+                WHERE group_key = ? AND chat_id = ?
+                """,
+                (group_key, chat_id),
+            ).fetchone()
+            return int(row["last_message_id"]) if row else 0
+
     def get_run(self, group_key: str, chat_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT group_key, chat_id, last_run_at, window_start, window_end, status, message_id, error
+                SELECT
+                    group_key,
+                    chat_id,
+                    last_run_at,
+                    window_start,
+                    window_end,
+                    status,
+                    message_id,
+                    error,
+                    last_message_id
                 FROM summary_runs
                 WHERE group_key = ? AND chat_id = ?
                 """,
@@ -181,7 +250,13 @@ class SummaryStore:
         status: str,
         message_id: int | None = None,
         error: str | None = None,
+        last_message_id: int | None = None,
     ) -> None:
+        previous_last_message_id = self.get_last_message_id(group_key, chat_id)
+        next_last_message_id = (
+            last_message_id if last_message_id is not None else previous_last_message_id
+        )
+
         with self._connect() as conn:
             conn.execute(
                 """
@@ -193,15 +268,17 @@ class SummaryStore:
                     window_end,
                     status,
                     message_id,
-                    error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    error,
+                    last_message_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(group_key, chat_id) DO UPDATE SET
                     last_run_at = excluded.last_run_at,
                     window_start = excluded.window_start,
                     window_end = excluded.window_end,
                     status = excluded.status,
                     message_id = excluded.message_id,
-                    error = excluded.error
+                    error = excluded.error,
+                    last_message_id = excluded.last_message_id
                 """,
                 (
                     group_key,
@@ -212,8 +289,22 @@ class SummaryStore:
                     status,
                     message_id,
                     error,
+                    next_last_message_id,
                 ),
             )
+
+    @staticmethod
+    def _ensure_summary_runs_column(
+        conn: sqlite3.Connection,
+        column_name: str,
+        column_sql: str,
+    ) -> None:
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(summary_runs)").fetchall()
+        }
+        if column_name not in columns:
+            conn.execute(f"ALTER TABLE summary_runs ADD COLUMN {column_name} {column_sql}")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:

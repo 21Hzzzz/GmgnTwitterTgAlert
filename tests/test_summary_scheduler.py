@@ -69,6 +69,8 @@ class SummarySchedulerTests(unittest.IsolatedAsyncioTestCase):
             run = store.get_run("AD", "-100ad")
             self.assertEqual(run["status"], "sent")
             self.assertEqual(run["last_run_at"], 1_800)
+            self.assertEqual(run["last_message_id"], 1)
+            self.assertEqual(summarizer.calls[0][1:], (1_000, 1_000))
 
     async def test_empty_window_records_empty_without_sending(self):
         with tempfile.TemporaryDirectory(dir=os.getcwd()) as tmpdir:
@@ -88,7 +90,9 @@ class SummarySchedulerTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(summarizer.calls, [])
             self.assertEqual(telegram.sent, [])
-            self.assertEqual(store.get_run("MAIN", "-100main")["status"], "empty")
+            run = store.get_run("MAIN", "-100main")
+            self.assertEqual(run["status"], "empty")
+            self.assertEqual(run["last_message_id"], 0)
 
     async def test_summarizer_failure_records_failed_without_sending(self):
         with tempfile.TemporaryDirectory(dir=os.getcwd()) as tmpdir:
@@ -123,7 +127,100 @@ class SummarySchedulerTests(unittest.IsolatedAsyncioTestCase):
             run = store.get_run("MAIN", "-100main")
             self.assertEqual(run["status"], "failed")
             self.assertEqual(run["last_run_at"], 0)
+            self.assertEqual(run["last_message_id"], 0)
             self.assertEqual(run["error"], "timeout after 120s")
+
+    async def test_delayed_run_uses_id_cursor_without_dropping_old_messages(self):
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as tmpdir:
+            store = SummaryStore(str(Path(tmpdir) / "summary.db"))
+            store.init()
+            for index, received_at in enumerate((100, 500, 1_000), start=1):
+                store.insert_message(
+                    "DEFAULT",
+                    "-100default",
+                    {
+                        "internal_id": f"m{index}",
+                        "tweet_id": f"t{index}",
+                        "timestamp": 1_700_000_000 + index,
+                        "action": "tweet",
+                        "author": {"handle": "elonmusk"},
+                        "content": {"text": f"message {index}"},
+                        "reference": None,
+                    },
+                    received_at=received_at,
+                )
+            telegram = FakeTelegramClient()
+            summarizer = FakeSummarizer("<b>summary</b>")
+            scheduler = SummaryScheduler(
+                store,
+                [{"group_key": "DEFAULT", "chat_id": "-100default", "interval_minutes": 15}],
+                telegram,
+                summarizer=summarizer,
+                started_at=0,
+            )
+
+            await scheduler.run_once(now=1_200)
+
+            sent_messages = summarizer.calls[0][0]
+            self.assertEqual([row["internal_id"] for row in sent_messages], ["m1", "m2", "m3"])
+            self.assertEqual(summarizer.calls[0][1:], (100, 1_000))
+            self.assertEqual(store.get_run("DEFAULT", "-100default")["last_message_id"], 3)
+
+    async def test_new_messages_after_cutoff_wait_for_next_successful_run(self):
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as tmpdir:
+            store = SummaryStore(str(Path(tmpdir) / "summary.db"))
+            store.init()
+            store.insert_message(
+                "DEFAULT",
+                "-100default",
+                {
+                    "internal_id": "m1",
+                    "tweet_id": "t1",
+                    "timestamp": 1_700_000_001,
+                    "action": "tweet",
+                    "author": {"handle": "elonmusk"},
+                    "content": {"text": "message 1"},
+                    "reference": None,
+                },
+                received_at=100,
+            )
+            telegram = FakeTelegramClient()
+            summarizer = FakeSummarizer("<b>summary</b>")
+            scheduler = SummaryScheduler(
+                store,
+                [{"group_key": "DEFAULT", "chat_id": "-100default", "interval_minutes": 15}],
+                telegram,
+                summarizer=summarizer,
+                started_at=0,
+            )
+
+            original_pin_message = telegram.pin_message
+
+            async def insert_new_message_then_pin(chat_id: str, message_id: int) -> bool:
+                store.insert_message(
+                    "DEFAULT",
+                    "-100default",
+                    {
+                        "internal_id": "m2",
+                        "tweet_id": "t2",
+                        "timestamp": 1_700_000_002,
+                        "action": "tweet",
+                        "author": {"handle": "elonmusk"},
+                        "content": {"text": "message 2"},
+                        "reference": None,
+                    },
+                    received_at=1_100,
+                )
+                return await original_pin_message(chat_id, message_id)
+
+            telegram.pin_message = insert_new_message_then_pin
+
+            await scheduler.run_once(now=1_000)
+            self.assertEqual(store.get_run("DEFAULT", "-100default")["last_message_id"], 1)
+
+            await scheduler.run_once(now=1_900)
+            self.assertEqual([row["internal_id"] for row in summarizer.calls[1][0]], ["m2"])
+            self.assertEqual(store.get_run("DEFAULT", "-100default")["last_message_id"], 2)
 
 
 if __name__ == "__main__":

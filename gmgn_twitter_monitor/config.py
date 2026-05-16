@@ -52,13 +52,18 @@ DEFAULT_DEEPSEEK_TRANSLATION_PROMPT = (
 
 DEFAULT_DEEPSEEK_SUMMARY_PROMPT = (
     "你是加密市场信息流分析助手。你会收到一组来自 GMGN/X 的监控消息 JSON。\n"
-    "目标是从嘈杂聊天中提炼对交易、项目进展、KOL 动向或风险有价值的信息。\n"
-    "请只返回合法 JSON，不要 markdown，不要解释。\n"
+    "无论输入消息是中文、英文还是其它语言，输出内容必须全部使用简体中文；保留 @用户名、$代币符号、URL 和项目名。\n"
+    "你的主要目标不是尽可能多地提取信息，而是尽可能忽略无用信息，同时不要漏掉可能重要的信号。\n"
+    "应过滤日常闲聊、表情互动、无上下文短回复、重复转推、纯玩笑和低信息量观点。\n"
+    "交易所、钱包、公链、项目方、监管/政府账号等官方推特发布的公告、上线、下架、活动、规则变化、风险提示和产品更新都应视为重点。\n"
+    "KOL 或高影响力账号提到代币、项目、链上异动、交易机会、风险事件、市场结构变化时，也应保留。\n"
+    "如果某条信息不确定是否重要，放入 watchlist，不要直接丢弃。\n"
+    "请只返回合法 JSON，不要 markdown，不要解释，不要输出英文总结。\n"
     "返回结构必须为："
     '{"important":[{"title":"...","reason":"...","source_ids":[1],"confidence":"high|medium|low"}],'
     '"watchlist":[{"title":"...","reason":"...","source_ids":[1]}],'
     '"noise_summary":"...","stats":{"useful_count":0,"noise_count":0}}。\n'
-    "important 放高价值信号；watchlist 放需要继续观察但证据不足的内容；"
+    "important 放明确重要的信息；watchlist 放可能重要但证据不足的信息；"
     "noise_summary 简短说明被过滤的闲聊类型。source_ids 必须引用输入消息里的 id。"
 )
 

@@ -79,21 +79,31 @@ class SummaryScheduler:
         if now - due_base < interval_seconds:
             return
 
-        window_start = now - interval_seconds
-        messages = self.store.fetch_messages(group_key, chat_id, window_start, now)
+        last_message_id = self.store.get_last_message_id(group_key, chat_id)
+        cutoff_message_id = self.store.get_max_message_id(group_key, chat_id)
+        messages = self.store.fetch_messages_by_id_range(
+            group_key,
+            chat_id,
+            last_message_id,
+            cutoff_message_id,
+        )
+        window_start = _message_window_start(messages, due_base)
+        window_end = _message_window_end(messages, now)
+
         if not messages:
             self.store.record_run(
                 group_key,
                 chat_id,
                 last_run_at=now,
                 window_start=window_start,
-                window_end=now,
+                window_end=window_end,
                 status="empty",
+                last_message_id=cutoff_message_id,
             )
             logger.info(f"AI 总结跳过: {group_key} -> {chat_id} 无新消息")
             return
 
-        summary_text = await self.summarizer.summarize(messages, window_start, now)
+        summary_text = await self.summarizer.summarize(messages, window_start, window_end)
         if not summary_text:
             error = getattr(self.summarizer, "last_error", None) or "summarizer returned no content"
             self.store.record_run(
@@ -101,9 +111,10 @@ class SummaryScheduler:
                 chat_id,
                 last_run_at=due_base,
                 window_start=window_start,
-                window_end=now,
+                window_end=window_end,
                 status="failed",
                 error=error,
+                last_message_id=last_message_id,
             )
             logger.warning(f"AI 总结失败，将保留窗口等待重试: {group_key} -> {chat_id} | {error}")
             return
@@ -115,9 +126,10 @@ class SummaryScheduler:
                 chat_id,
                 last_run_at=due_base,
                 window_start=window_start,
-                window_end=now,
+                window_end=window_end,
                 status="failed",
                 error="telegram sendMessage failed",
+                last_message_id=last_message_id,
             )
             logger.warning(f"AI 总结发送失败，将保留窗口等待重试: {group_key} -> {chat_id}")
             return
@@ -128,8 +140,21 @@ class SummaryScheduler:
             chat_id,
             last_run_at=now,
             window_start=window_start,
-            window_end=now,
+            window_end=window_end,
             status="sent" if pinned else "sent_pin_failed",
             message_id=message_id,
+            last_message_id=cutoff_message_id,
         )
         logger.info(f"AI 总结已发送并置顶: {group_key} -> {chat_id} message_id={message_id}")
+
+
+def _message_window_start(messages: list[dict], fallback: int) -> int:
+    if not messages:
+        return fallback
+    return int(messages[0].get("received_at") or fallback)
+
+
+def _message_window_end(messages: list[dict], fallback: int) -> int:
+    if not messages:
+        return fallback
+    return int(messages[-1].get("received_at") or fallback)

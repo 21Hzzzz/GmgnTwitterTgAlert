@@ -119,7 +119,8 @@ class SummaryConfigTests(unittest.TestCase):
         config = self.load_config({})
 
         self.assertIn("推文翻译器", config.DEEPSEEK_TRANSLATION_PROMPT)
-        self.assertIn("加密市场信息流分析助手", config.DEEPSEEK_SUMMARY_PROMPT)
+        self.assertIn("必须全部使用简体中文", config.DEEPSEEK_SUMMARY_PROMPT)
+        self.assertIn("官方推特发布的公告", config.DEEPSEEK_SUMMARY_PROMPT)
 
         config = self.load_config(
             {
