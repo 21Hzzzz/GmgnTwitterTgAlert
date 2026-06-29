@@ -19,4 +19,4 @@ monitor_running.png
 .DS_Store
 *.swp
 docs/instagram_signal_format.md
-docs/instagram_story_api_guide.md
+docs/webhook_integration_guide.md

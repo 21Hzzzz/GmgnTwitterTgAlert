@@ -19,7 +19,17 @@ from websockets.server import WebSocketServerProtocol
 TEXT_ENRICHMENT_ACTIONS = {"tweet", "reply", "quote", "repost"}
 
 
+def _is_instagram_message(message: dict) -> bool:
+    author = message.get("author") or {}
+    tags = author.get("tags") or []
+    return message.get("platform_flag") == 4 and "instagram" in tags
+
+
 def _should_run_text_enrichment(message: dict) -> bool:
+    if _is_instagram_message(message):
+        from . import config as cfg
+        if not cfg.INSTAGRAM_TRANSLATION_ENABLE:
+            return False
     return message.get("action") in TEXT_ENRICHMENT_ACTIONS
 
 
@@ -1546,6 +1556,197 @@ class WebhookDistributor(BaseDistributor):
             logger.error(f"🪝 Webhook 推送网络异常: {e}")
         except Exception as e:
             logger.error(f"🪝 Webhook 推送未知异常: {e}")
+
+
+# ---------------------------------------------------------------------------
+#  Instagram Webhook HTTP POST 分发器
+# ---------------------------------------------------------------------------
+class InstagramWebhookDistributor(BaseDistributor):
+    """将 GMGN Instagram 信号转换为 InsClawer webhook 格式后推送。"""
+
+    MAX_RETRY_ATTEMPTS = 3
+    RETRY_BASE_DELAY_SECONDS = 0.5
+
+    def __init__(
+        self,
+        url: str,
+        api_key: str,
+        handles: list[str] | None = None,
+        notes: dict[str, str] | None = None,
+    ):
+        self.url = url
+        self.api_key = api_key
+        self.handles = {h.lower() for h in (handles or []) if h}
+        self.notes = {k.lower(): v for k, v in (notes or {}).items()}
+        self._session: aiohttp.ClientSession | None = None
+
+    async def start(self):
+        if not self.url:
+            logger.info("📸 Instagram Webhook 分发器未配置 URL，已跳过启动")
+            return
+        self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        handle_desc = ", ".join(sorted(self.handles)) if self.handles else "全部"
+        logger.success(f"📸 Instagram Webhook 分发器已启动 (目标: {self.url}, 过滤: {handle_desc})")
+
+    async def stop(self):
+        if self._session:
+            await self._session.close()
+            logger.info("📸 Instagram Webhook 分发器已关闭")
+
+    @staticmethod
+    def _is_instagram_message(message: dict) -> bool:
+        return _is_instagram_message(message)
+
+    @staticmethod
+    def _format_local_time(timestamp: int | float, tz: timezone) -> str:
+        if not timestamp:
+            return ""
+        return datetime.fromtimestamp(timestamp, tz=tz).strftime("%Y-%m-%d %H:%M:%S")
+
+    @staticmethod
+    def _pick_cover_url(media: list[dict]) -> str:
+        for preferred_type in ("image", "thumbnail"):
+            for item in media:
+                if item.get("type") == preferred_type and item.get("url"):
+                    return item["url"]
+        return next((item.get("url") for item in media if item.get("url")), "")
+
+    @staticmethod
+    def _build_post_identity(username: str, raw_id: str) -> tuple[str, str]:
+        if raw_id.isdigit():
+            return f"story_{raw_id}", f"https://www.instagram.com/stories/{username}/{raw_id}/"
+        return raw_id, f"https://www.instagram.com/p/{raw_id}/"
+
+    @staticmethod
+    def _is_retryable_status(status: int) -> bool:
+        return status in {408, 429} or status >= 500
+
+    def _build_payload(self, message: dict) -> dict | None:
+        if not self._is_instagram_message(message):
+            return None
+
+        if message.get("action") not in {"tweet", "photo", "description"}:
+            return None
+
+        author = message.get("author") or {}
+        username = (author.get("handle") or "").lower()
+        if not username:
+            return None
+        if self.handles and username not in self.handles:
+            return None
+
+        # 头像/简介变更先保留转换入口；当前 GMGN Instagram 样例只覆盖新帖/Story。
+        if message.get("action") in {"photo", "description"}:
+            logger.debug(f"📸 Instagram Webhook 暂不推送资料变更事件: @{username} {message.get('action')}")
+            return None
+
+        raw_id = str(message.get("tweet_id") or message.get("internal_id") or "")
+        if not raw_id:
+            return None
+
+        content = message.get("content") or {}
+        media = content.get("media") or []
+        note = self.notes.get(username, "")
+        user_display = f"{note} (@{username})" if note else f"@{username}"
+        shortcode, post_url = self._build_post_identity(username, raw_id)
+
+        timestamp = message.get("timestamp") or 0
+        try:
+            timestamp = float(timestamp)
+        except (TypeError, ValueError):
+            timestamp = 0.0
+
+        tz_cst = timezone(timedelta(hours=8))
+        now_utc = datetime.now(timezone.utc)
+        now_local = now_utc.astimezone(tz_cst)
+        published_time = self._format_local_time(timestamp, tz_cst)
+        sys_time = now_local.strftime("%Y-%m-%d %H:%M:%S")
+        avatar_url = author.get("avatar") or ""
+        cover_url = self._pick_cover_url(media)
+
+        return {
+            "username": username,
+            "note": note,
+            "shortcode": shortcode,
+            "content": content.get("text") or "",
+            "cover_url": cover_url,
+            "avatar_url": avatar_url,
+            "taken_at": timestamp,
+            "post_url": post_url,
+            "detected_at": now_utc.isoformat(),
+            "time": published_time,
+            "timestamp": timestamp,
+            "sys_time": sys_time,
+            "avatar": avatar_url,
+            "cover": cover_url,
+            "link": post_url,
+            "user": user_display,
+            "type": "instagram",
+            "display_name": user_display,
+        }
+
+    async def distribute(self, message: dict) -> None:
+        if not self.url or not self._session:
+            return
+        if message.get("_dispatch_target") != "DEFAULT":
+            return
+
+        payload = self._build_payload(message)
+        if not payload:
+            return
+
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+
+        for attempt in range(1, self.MAX_RETRY_ATTEMPTS + 1):
+            try:
+                async with self._session.post(self.url, json=payload, headers=headers) as resp:
+                    if resp.status < 300:
+                        logger.info(f"📸 Instagram Webhook 推送成功: @{payload['username']} {payload['shortcode']} [{resp.status}]")
+                        return
+
+                    resp_body = await resp.text()
+                    if not self._is_retryable_status(resp.status):
+                        logger.error(f"📸 Instagram Webhook 推送失败 [{resp.status}]: {resp_body[:200]}")
+                        return
+
+                    if attempt >= self.MAX_RETRY_ATTEMPTS:
+                        logger.error(f"📸 Instagram Webhook 重试后仍失败 [{resp.status}]: {resp_body[:200]}")
+                        return
+
+                    retry_after = resp.headers.get("Retry-After")
+                    delay = self._compute_retry_delay(attempt, retry_after)
+                    logger.warning(
+                        f"📸 Instagram Webhook 推送失败 [{resp.status}]，"
+                        f"{delay:.1f}s 后重试 ({attempt}/{self.MAX_RETRY_ATTEMPTS}): {resp_body[:120]}"
+                    )
+                    await asyncio.sleep(delay)
+            except asyncio.TimeoutError:
+                if attempt >= self.MAX_RETRY_ATTEMPTS:
+                    logger.error("📸 Instagram Webhook 重试后仍超时 (10s)")
+                    return
+                delay = self._compute_retry_delay(attempt)
+                logger.warning(f"📸 Instagram Webhook 推送超时，{delay:.1f}s 后重试 ({attempt}/{self.MAX_RETRY_ATTEMPTS})")
+                await asyncio.sleep(delay)
+            except aiohttp.ClientError as e:
+                if attempt >= self.MAX_RETRY_ATTEMPTS:
+                    logger.error(f"📸 Instagram Webhook 重试后仍网络异常: {e}")
+                    return
+                delay = self._compute_retry_delay(attempt)
+                logger.warning(f"📸 Instagram Webhook 网络异常，{delay:.1f}s 后重试 ({attempt}/{self.MAX_RETRY_ATTEMPTS}): {e}")
+                await asyncio.sleep(delay)
+            except Exception as e:
+                logger.error(f"📸 Instagram Webhook 推送未知异常: {e}")
+                return
+
+    def _compute_retry_delay(self, attempt: int, retry_after: str | None = None) -> float:
+        if retry_after:
+            try:
+                return min(float(retry_after), 5.0)
+            except ValueError:
+                pass
+        return self.RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
 
 
 # ---------------------------------------------------------------------------

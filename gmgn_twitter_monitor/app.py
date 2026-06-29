@@ -22,6 +22,7 @@ from .distributor import (
     LoggingDistributor,
     TelegramDistributor,
     FeishuDistributor,
+    InstagramWebhookDistributor,
     WebhookDistributor,
     WebSocketDistributor,
 )
@@ -136,6 +137,7 @@ class MessageDeduplicator:
             standardized_msg = message.to_dict()
             standardized_msg["_internal_id"] = raw_item.get("i", "")
             standardized_msg["_dispatch_target"] = target
+            standardized_msg["platform_flag"] = raw_item.get("pf")
 
             log_tag = f"[{message.action.upper()}]"
             summary_text = (
@@ -235,6 +237,13 @@ def _build_distributor_hub(storage: SQLiteStorage | None = None) -> DistributorH
         WebhookDistributor(
             url=config.WEBHOOK_URL,
             secret=config.WEBHOOK_SECRET,
+        ),
+        # 5. Instagram 专用 Webhook（InsClawer 兼容格式）
+        InstagramWebhookDistributor(
+            url=config.INSTAGRAM_WEBHOOK_URL,
+            api_key=config.INSTAGRAM_WEBHOOK_API_KEY,
+            handles=config.INSTAGRAM_WEBHOOK_HANDLES,
+            notes=config.INSTAGRAM_WEBHOOK_NOTES,
         ),
     ]
     if config.WS_ENABLE:

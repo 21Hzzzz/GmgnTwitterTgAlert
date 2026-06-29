@@ -165,6 +165,11 @@ python3 ctl.py restart
 | `SUMMARY_TWEET_TEXT_LIMIT` | ❌ | 每条推文喂给总结 AI 的正文+关联原文总长度限制，默认 `500` 字 |
 | `WEBHOOK_URL` | ❌ | Webhook 推送目标 URL，留空则禁用 |
 | `WEBHOOK_SECRET` | ❌ | HMAC-SHA256 签名密钥 |
+| `INSTAGRAM_WEBHOOK_URL` | ❌ | Instagram 专用 Webhook 地址，按 InsClawer 兼容格式推送，留空则禁用 |
+| `INSTAGRAM_WEBHOOK_API_KEY` | ❌ | Instagram Webhook 的 `X-API-Key` 请求头 |
+| `INSTAGRAM_WEBHOOK_HANDLES` | ❌ | 需要推送的 Instagram 用户名列表，默认 `binance,binance.zh` |
+| `INSTAGRAM_WEBHOOK_NOTES` | ❌ | Instagram 用户备注映射，如 `binance:币安官方,binance.zh:币安中文` |
+| `INSTAGRAM_TRANSLATION_ENABLE` | ❌ | 是否允许项目内对 Instagram 内容做翻译/AI 分析，默认 `False`；专用 Instagram Webhook 始终推送原文 |
 
 #### 多频道路由分组规则
 
@@ -477,6 +482,7 @@ def verify_signature(body: bytes, secret: str, received_signature: str) -> bool:
 | TG 推送 | `.env → TG_BOT_TOKEN` + 路由分组变量 |
 | 翻译 | `.env → DEEPSEEK_API_KEY` |
 | Webhook | `.env → WEBHOOK_URL` |
+| Instagram Webhook | `.env → INSTAGRAM_WEBHOOK_URL` + `INSTAGRAM_WEBHOOK_API_KEY` |
 | 心跳间隔 | 30 秒 |
 | 看门狗超时 | 120 秒（无消息自动刷新页面） |
 | 服务自动重启 | 每 12 小时（`RuntimeMaxSec=43200`） |

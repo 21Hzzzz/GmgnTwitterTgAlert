@@ -110,6 +110,25 @@ FEISHU_ENABLE_DEFAULT = os.getenv("FEISHU_ENABLE_DEFAULT", "False").lower() in (
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 
+# ---------- Instagram Webhook 推送配置 ----------
+INSTAGRAM_WEBHOOK_URL = os.getenv("INSTAGRAM_WEBHOOK_URL", "")
+INSTAGRAM_WEBHOOK_API_KEY = os.getenv("INSTAGRAM_WEBHOOK_API_KEY", "")
+INSTAGRAM_WEBHOOK_HANDLES = [
+    h.strip().lower()
+    for h in os.getenv("INSTAGRAM_WEBHOOK_HANDLES", "binance,binance.zh").split(",")
+    if h.strip()
+]
+INSTAGRAM_WEBHOOK_NOTES: dict[str, str] = {}
+for item in os.getenv("INSTAGRAM_WEBHOOK_NOTES", "").split(","):
+    if ":" not in item:
+        continue
+    handle, note = item.split(":", 1)
+    handle = handle.strip().lower()
+    note = note.strip()
+    if handle:
+        INSTAGRAM_WEBHOOK_NOTES[handle] = note
+INSTAGRAM_TRANSLATION_ENABLE = os.getenv("INSTAGRAM_TRANSLATION_ENABLE", "False").lower() in ("true", "1", "yes")
+
 # ---------- DeepSeek 翻译配置 ----------
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
