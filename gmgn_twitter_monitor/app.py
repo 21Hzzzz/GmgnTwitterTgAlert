@@ -1,10 +1,14 @@
 import asyncio
+import base64
+import binascii
+import hashlib
 import json
 import os
 import signal
 import subprocess
 import time
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 
 from loguru import logger
 from playwright.async_api import async_playwright
@@ -54,6 +58,7 @@ class MessageDeduplicator:
         self._processed_feishu_ids: set[str] = set()
         self._processed_tg_ids: set[str] = set()
         self._history_queue: list[str] = []
+        self._instagram_fingerprints_by_key: dict[str, list[str]] = {}
         # 关键：持有 asyncio.Task 引用，防止 GC 回收导致协程中途消失
         self._background_tasks: set[asyncio.Task] = set()
 
@@ -64,10 +69,108 @@ class MessageDeduplicator:
                 old_id = self._history_queue.pop(0)
                 self._processed_feishu_ids.discard(old_id)
                 self._processed_tg_ids.discard(old_id)
+            if len(self._instagram_fingerprints_by_key) > 1000:
+                self._instagram_fingerprints_by_key.pop(next(iter(self._instagram_fingerprints_by_key)), None)
+
+    @staticmethod
+    def _is_instagram_item(raw_item: dict) -> bool:
+        tags = raw_item.get("ut") or []
+        return raw_item.get("pf") == 4 and "instagram" in tags
+
+    @staticmethod
+    def _instagram_identity_key(raw_item: dict) -> str:
+        u_data = raw_item.get("u") or {}
+        handle = (u_data.get("s") or "").lower()
+        action = raw_item.get("tw") or "unknown"
+        source_id = raw_item.get("ti") or raw_item.get("i") or ""
+        return f"ins:{handle}:{action}:{source_id}"
+
+    @staticmethod
+    def _stable_media_identity(url: str | None, allow_proxy_decode: bool = True) -> str:
+        if not url:
+            return ""
+
+        try:
+            parsed = urlsplit(url)
+        except ValueError:
+            return url
+
+        query = parse_qs(parsed.query)
+        ig_cache_key = query.get("ig_cache_key")
+        if ig_cache_key:
+            return f"ig_cache_key:{ig_cache_key[0]}"
+
+        path = unquote(parsed.path.rstrip("/"))
+        basename = path.rsplit("/", 1)[-1] if path else ""
+        if allow_proxy_decode and basename:
+            try:
+                padded = basename + ("=" * (-len(basename) % 4))
+                decoded = base64.urlsafe_b64decode(padded).decode("utf-8")
+                if decoded.startswith(("http://", "https://")):
+                    return MessageDeduplicator._stable_media_identity(
+                        decoded,
+                        allow_proxy_decode=False,
+                    )
+            except (binascii.Error, ValueError, UnicodeDecodeError):
+                pass
+
+        if basename:
+            return f"path:{basename}"
+        return f"host:{parsed.netloc}"
+
+    @staticmethod
+    def _instagram_fingerprint(raw_item: dict) -> str:
+        content = raw_item.get("c") if isinstance(raw_item.get("c"), dict) else {}
+        media = content.get("m") if isinstance(content, dict) else []
+        media_parts = []
+        if isinstance(media, list):
+            media_parts = [
+                {
+                    "type": item.get("t"),
+                    "identity": MessageDeduplicator._stable_media_identity(item.get("u")),
+                }
+                for item in media
+                if isinstance(item, dict)
+            ]
+
+        payload = {
+            "ts": raw_item.get("ts") or "",
+            "text": content.get("t") if isinstance(content, dict) else "",
+            "media": media_parts,
+        }
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        return hashlib.sha1(encoded).hexdigest()[:12]
+
+    def _dedup_identity(self, raw_item: dict) -> str:
+        internal_id = raw_item.get("i", "")
+        if not internal_id:
+            return ""
+        if not self._is_instagram_item(raw_item):
+            return internal_id
+
+        identity_key = self._instagram_identity_key(raw_item)
+        if raw_item.get("cp") != 1:
+            return identity_key
+
+        fingerprint = self._instagram_fingerprint(raw_item)
+        seen = self._instagram_fingerprints_by_key.setdefault(identity_key, [])
+        if not seen:
+            seen.append(fingerprint)
+            return identity_key
+        if fingerprint == seen[0]:
+            return identity_key
+        if fingerprint in seen:
+            return f"{identity_key}:{fingerprint}"
+
+        seen.append(fingerprint)
+        logger.warning(
+            f"📸 Instagram 同一 GMGN ID 出现不同内容，拆分为独立推送: {identity_key}#{fingerprint}"
+        )
+        return f"{identity_key}:{fingerprint}"
 
     def process(self, raw_item: dict) -> None:
         """处理一条原始 gmgn 数据项。"""
-        internal_id = raw_item.get("i", "")
+        internal_id = self._dedup_identity(raw_item)
         if not internal_id:
             return
 
@@ -133,11 +236,18 @@ class MessageDeduplicator:
     def _dispatch(self, raw_item: dict, target: str) -> None:
         """标准化并推送消息。"""
         try:
+            dispatch_id = self._dedup_identity(raw_item)
             message = build_standardized_message(raw_item)
             standardized_msg = message.to_dict()
-            standardized_msg["_internal_id"] = raw_item.get("i", "")
+            standardized_msg["_internal_id"] = dispatch_id
+            standardized_msg["_source_internal_id"] = raw_item.get("i", "")
             standardized_msg["_dispatch_target"] = target
             standardized_msg["platform_flag"] = raw_item.get("pf")
+            if self._is_instagram_item(raw_item):
+                identity_key = self._instagram_identity_key(raw_item)
+                standardized_msg["_instagram_source_id"] = raw_item.get("ti") or raw_item.get("i") or ""
+                standardized_msg["_instagram_identity_fingerprint"] = self._instagram_fingerprint(raw_item)
+                standardized_msg["_instagram_identity_collided"] = dispatch_id != identity_key
 
             log_tag = f"[{message.action.upper()}]"
             summary_text = (
@@ -192,6 +302,63 @@ def _format_delay_info(parsed: dict) -> str:
     except Exception:
         pass
     return ""
+
+
+def _is_gmgn_ws_url(url: str) -> bool:
+    if "gmgn.ai" not in url:
+        return False
+    lowered = url.lower()
+    return "/ws" in lowered or "socket.io" in lowered or "transport=websocket" in lowered
+
+
+def _is_gmgn_polling_url(url: str) -> bool:
+    lowered = url.lower()
+    return "gmgn.ai" in lowered and "transport=polling" in lowered
+
+
+def _format_ws_url_for_log(url: str) -> str:
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return url
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
+def _decode_ws_frame_text(frame_data: Any) -> str:
+    if isinstance(frame_data, bytes):
+        try:
+            return frame_data.decode("utf-8")
+        except UnicodeDecodeError:
+            return ""
+    return frame_data if isinstance(frame_data, str) else str(frame_data)
+
+
+def _is_heartbeat_frame(frame_data: Any) -> bool:
+    text = _decode_ws_frame_text(frame_data)
+    if not text:
+        return False
+    if text in {"2", "3", "2probe", "3probe"}:
+        return True
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    return parsed.get("action") == "heartbeat" or parsed.get("channel") == "heartbeat"
+
+
+def _format_ws_frame_preview(frame_data: Any, limit: int = 200) -> str:
+    if isinstance(frame_data, bytes):
+        try:
+            text = frame_data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = frame_data.hex()
+            return f"bytes(hex,len={len(frame_data)}): {text[:limit]}"
+        return f"bytes(utf8,len={len(frame_data)}): {text[:limit]!r}"
+    text = str(frame_data)
+    suffix = "..." if len(text) > limit else ""
+    return f"{type(frame_data).__name__}(len={len(text)}): {text[:limit]!r}{suffix}"
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +455,11 @@ async def main():
     summary_scheduler = DailySummaryScheduler(storage, hub)
     deduplicator = MessageDeduplicator(hub.publish)
     connected_ws = set()
+    watchdog_timeout_count = 0
+    ignored_ws_log_count = 0
+    heartbeat_count = 0
+    last_heartbeat_log = 0.0
+    raw_heartbeat_log_count = 0
 
     try:
         await storage.start()
@@ -297,8 +469,31 @@ async def main():
         async with async_playwright() as playwright:
             page = await browser.launch(playwright)
 
-            def handle_ws_frame(frame_data):
+            def feed_upstream_activity(reason: str) -> None:
+                nonlocal watchdog_timeout_count
                 watchdog.feed()
+                watchdog_timeout_count = 0
+
+            def handle_ws_activity_frame(frame_data, direction: str) -> bool:
+                nonlocal heartbeat_count, last_heartbeat_log, raw_heartbeat_log_count
+                feed_upstream_activity(f"ws_{direction}")
+                preview = _format_ws_frame_preview(frame_data)
+                if _is_heartbeat_frame(frame_data):
+                    heartbeat_count += 1
+                    now = time.time()
+                    if raw_heartbeat_log_count < 4 or now - last_heartbeat_log >= 60:
+                        raw_heartbeat_log_count += 1
+                        last_heartbeat_log = now
+                        logger.info(
+                            f"💓 GMGN WS 心跳包 #{heartbeat_count} {direction}: {preview}"
+                        )
+                    return True
+                return False
+
+            def handle_ws_frame(frame_data):
+                if handle_ws_activity_frame(frame_data, "received"):
+                    return
+                feed_upstream_activity("ws_message")
                 try:
                     parsed = parse_socketio_payload(frame_data)
                     if not parsed:
@@ -317,23 +512,31 @@ async def main():
                     logger.error(f"❌ 处理 WS 数据时发生错误: {e}")
 
             def on_web_socket(ws):
-                if "gmgn.ai/ws" in ws.url:
+                nonlocal ignored_ws_log_count, watchdog_timeout_count
+                if _is_gmgn_ws_url(ws.url):
                     if ws.url not in connected_ws:
                         connected_ws.add(ws.url)
-                        logger.success("[WS 建立连接] 监听中...")
+                        logger.success(f"[WS 建立连接] 监听中... {_format_ws_url_for_log(ws.url)}")
 
-                    watchdog.feed()
+                    watchdog_timeout_count = 0
+                    feed_upstream_activity("ws_connected")
+                    ws.on("framesent", lambda frame: handle_ws_activity_frame(frame, "sent"))
                     ws.on("framereceived", lambda frame: handle_ws_frame(frame))
                     ws.on("close", lambda _: connected_ws.discard(ws.url))
+                elif "gmgn.ai" in ws.url and ignored_ws_log_count < 5:
+                    ignored_ws_log_count += 1
+                    logger.debug(f"忽略非监控 WS: {_format_ws_url_for_log(ws.url)}")
 
             async def handle_http_response(response):
                 """拦截 Socket.io HTTP 降级轮询响应，防止 WS 重连间隙漏消息。"""
                 try:
-                    if "gmgn.ai/ws" not in response.url or "transport=polling" not in response.url:
+                    if not _is_gmgn_polling_url(response.url):
                         return
                     if response.status != 200:
+                        logger.warning(f"GMGN Polling 响应异常 [{response.status}]: {response.url}")
                         return
 
+                    feed_upstream_activity("polling_response")
                     text = await response.text()
                     if '42["message"' not in text:
                         return
@@ -359,7 +562,7 @@ async def main():
                             # 频道过滤 (twitter_user_monitor_basic) + 字符串反序列化
                             parsed = parse_socketio_payload(msg_content)
                             if parsed:
-                                watchdog.feed()
+                                feed_upstream_activity("polling_message")
                                 delay_info = _format_delay_info(parsed)
                                 logger.info(f"📦 原始解析消息(Polling): {json.dumps(parsed, ensure_ascii=False)}{delay_info}")
                                 triggers_map = extract_triggers_map(parsed["data"])
@@ -372,8 +575,16 @@ async def main():
                 except Exception as e:
                     logger.debug(f"Polling 响应解析跳过: {e}")
 
+            def handle_request_failed(request):
+                if "gmgn.ai" not in request.url:
+                    return
+                failure = request.failure or "unknown"
+                if _is_gmgn_ws_url(request.url) or _is_gmgn_polling_url(request.url):
+                    logger.warning(f"GMGN 上游连接请求失败: {_format_ws_url_for_log(request.url)} | {failure}")
+
             page.on("websocket", on_web_socket)
             page.on("response", handle_http_response)
+            page.on("requestfailed", handle_request_failed)
 
             await browser.run_first_login_if_needed()
             await browser.goto_monitor_page()
@@ -389,10 +600,20 @@ async def main():
                 await asyncio.sleep(config.WATCHDOG_POLL_INTERVAL)
                 if watchdog.is_timed_out():
                     time_since_last_msg = watchdog.time_since_last_msg()
-                    logger.warning(f"⚠️ 看门狗警报: {time_since_last_msg:.0f}秒内未收到任何WS消息，频道可能卡死断开！")
-                    logger.info("尝试刷新整个网页结构...")
+                    watchdog_timeout_count += 1
+                    if connected_ws:
+                        logger.warning(
+                            f"⚠️ 看门狗警报: {time_since_last_msg:.0f}秒内未收到上游 WS/Polling 活动，"
+                            f"当前连接数: {len(connected_ws)}"
+                        )
+                    else:
+                        logger.warning(
+                            f"⚠️ 看门狗警报: {time_since_last_msg:.0f}秒内未建立上游 WS/Polling 连接"
+                        )
+                    force_goto = not connected_ws or watchdog_timeout_count >= 3
+                    logger.info(f"尝试恢复网页结构... ({'完整导航' if force_goto else '普通刷新'})")
                     try:
-                        await browser.recover_after_timeout()
+                        await browser.recover_after_timeout(force_goto=force_goto)
                         watchdog.feed()
                     except Exception as e:
                         logger.error(f"刷新重连时发生异常: {e}")

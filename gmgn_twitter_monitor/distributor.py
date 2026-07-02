@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+from contextlib import suppress
 from datetime import datetime, timezone, timedelta
 from typing import Set
 
@@ -1566,6 +1567,8 @@ class InstagramWebhookDistributor(BaseDistributor):
 
     MAX_RETRY_ATTEMPTS = 3
     RETRY_BASE_DELAY_SECONDS = 0.5
+    SEND_INTERVAL_SECONDS = 0.2
+    QUEUE_WARN_SIZE = 10
 
     def __init__(
         self,
@@ -1579,16 +1582,27 @@ class InstagramWebhookDistributor(BaseDistributor):
         self.handles = {h.lower() for h in (handles or []) if h}
         self.notes = {k.lower(): v for k, v in (notes or {}).items()}
         self._session: aiohttp.ClientSession | None = None
+        self._queue: asyncio.Queue[tuple[dict, dict, asyncio.Future]] | None = None
+        self._worker_task: asyncio.Task | None = None
 
     async def start(self):
         if not self.url:
             logger.info("📸 Instagram Webhook 分发器未配置 URL，已跳过启动")
             return
         self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        self._queue = asyncio.Queue()
+        self._worker_task = asyncio.create_task(self._run_worker())
         handle_desc = ", ".join(sorted(self.handles)) if self.handles else "全部"
         logger.success(f"📸 Instagram Webhook 分发器已启动 (目标: {self.url}, 过滤: {handle_desc})")
 
     async def stop(self):
+        if self._queue:
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._queue.join(), timeout=15)
+        if self._worker_task:
+            self._worker_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._worker_task
         if self._session:
             await self._session.close()
             logger.info("📸 Instagram Webhook 分发器已关闭")
@@ -1640,7 +1654,12 @@ class InstagramWebhookDistributor(BaseDistributor):
             logger.debug(f"📸 Instagram Webhook 暂不推送资料变更事件: @{username} {message.get('action')}")
             return None
 
-        raw_id = str(message.get("tweet_id") or message.get("internal_id") or "")
+        raw_id = str(
+            message.get("tweet_id")
+            or message.get("_instagram_source_id")
+            or message.get("internal_id")
+            or ""
+        )
         if not raw_id:
             return None
 
@@ -1663,6 +1682,10 @@ class InstagramWebhookDistributor(BaseDistributor):
         sys_time = now_local.strftime("%Y-%m-%d %H:%M:%S")
         avatar_url = author.get("avatar") or ""
         cover_url = self._pick_cover_url(media)
+        identity_suffix = str(message.get("_instagram_identity_fingerprint") or "")[:8]
+
+        if message.get("_instagram_identity_collided") and identity_suffix:
+            shortcode = f"{shortcode}_{identity_suffix}"
 
         return {
             "username": username,
@@ -1699,6 +1722,39 @@ class InstagramWebhookDistributor(BaseDistributor):
         if self.api_key:
             headers["X-API-Key"] = self.api_key
 
+        if not self._queue:
+            await self._post_payload(payload, headers)
+            return
+
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        queue_size = self._queue.qsize()
+        await self._queue.put((payload, headers, future))
+        if queue_size >= self.QUEUE_WARN_SIZE:
+            logger.warning(
+                f"📸 Instagram Webhook 队列积压: 前方 {queue_size} 条，"
+                f"当前 @{payload['username']} {payload['shortcode']}"
+            )
+        elif queue_size:
+            logger.debug(f"📸 Instagram Webhook 已排队: @{payload['username']} {payload['shortcode']} (前方 {queue_size} 条)")
+        await future
+
+    async def _run_worker(self) -> None:
+        assert self._queue is not None
+        while True:
+            payload, headers, future = await self._queue.get()
+            try:
+                await self._post_payload(payload, headers)
+                if not future.done():
+                    future.set_result(None)
+            except Exception as e:
+                if not future.done():
+                    future.set_exception(e)
+            finally:
+                self._queue.task_done()
+                await asyncio.sleep(self.SEND_INTERVAL_SECONDS)
+
+    async def _post_payload(self, payload: dict, headers: dict) -> None:
         for attempt in range(1, self.MAX_RETRY_ATTEMPTS + 1):
             try:
                 async with self._session.post(self.url, json=payload, headers=headers) as resp:

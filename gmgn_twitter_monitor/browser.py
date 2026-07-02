@@ -84,11 +84,16 @@ class BrowserManager:
         await self.page.screenshot(path=config.SCREENSHOT_PATH)
         logger.info(f"界面已准备完毕，运行截图已保存: {config.SCREENSHOT_PATH}")
 
-    async def recover_after_timeout(self):
-        await self.page.reload(wait_until="domcontentloaded")
-        logger.success("网页刷新指令下发完成，看门狗周期重置。")
+    async def recover_after_timeout(self, force_goto: bool = False):
+        if force_goto:
+            logger.info("执行完整导航恢复，重新进入监控目标页面...")
+            await self.goto_monitor_page()
+        else:
+            await self.page.reload(wait_until="domcontentloaded")
+            logger.success("网页刷新指令下发完成，看门狗周期重置。")
         await self.page.wait_for_timeout(5000)
         await self.switch_to_mine_tab()
+        await self.save_screenshot()
 
     async def close(self):
         if self.context:
