@@ -1,3 +1,6 @@
+import json
+from contextlib import suppress
+
 from playwright.async_api import BrowserContext, Page, Playwright
 from loguru import logger
 
@@ -22,8 +25,67 @@ class BrowserManager:
                 "--start-maximized",
             ],
         )
-        self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
+        await self._install_ws_subscription_filter()
+        restored_pages = list(self.context.pages)
+        self.page = await self.context.new_page()
+        self._install_page_console_bridge(self.page)
+        closed_count = 0
+        for page in restored_pages:
+            if page is self.page:
+                continue
+            with suppress(Exception):
+                await page.close()
+                closed_count += 1
+        if restored_pages:
+            logger.info(
+                f"已关闭 {closed_count}/{len(restored_pages)} 个持久化恢复页面，"
+                "使用已注入脚本的新页面"
+            )
         return self.page
+
+    async def _install_ws_subscription_filter(self) -> None:
+        if not self.context or not config.GMGN_BLOCK_WS_SUBSCRIBE_CHANNELS:
+            return
+
+        blocked_channels_json = json.dumps(config.GMGN_BLOCK_WS_SUBSCRIBE_CHANNELS)
+        script = f"""
+(() => {{
+  const blockedChannels = new Set({blocked_channels_json});
+  const originalSend = WebSocket.prototype.send;
+
+  WebSocket.prototype.send = function(data) {{
+    try {{
+      const text = typeof data === "string" ? data : "";
+      const compact = text.replace(/\\s+/g, "");
+      for (const channel of blockedChannels) {{
+        if (
+          compact.includes('"action":"subscribe"') &&
+          compact.includes('"channel":"' + channel + '"')
+        ) {{
+          console.info("[GmgnTwitterClaw] blocked WS subscribe:", channel);
+          return;
+        }}
+      }}
+    }} catch (error) {{
+      // Keep the page behavior intact if the guard itself ever fails.
+    }}
+    return originalSend.apply(this, arguments);
+  }};
+}})();
+"""
+        await self.context.add_init_script(script)
+        logger.success(
+            "已安装 GMGN WS 订阅降噪脚本，屏蔽频道: "
+            + ", ".join(config.GMGN_BLOCK_WS_SUBSCRIBE_CHANNELS)
+        )
+
+    def _install_page_console_bridge(self, page: Page) -> None:
+        def handle_console(msg):
+            text = msg.text
+            if "[GmgnTwitterClaw]" in text:
+                logger.info(f"浏览器控制台: {text}")
+
+        page.on("console", handle_console)
 
     async def run_first_login_if_needed(self):
         if not config.FIRST_RUN_LOGIN:
@@ -97,4 +159,5 @@ class BrowserManager:
 
     async def close(self):
         if self.context:
-            await self.context.close()
+            with suppress(Exception):
+                await self.context.close()

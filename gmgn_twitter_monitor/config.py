@@ -6,6 +6,15 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
+
+def _int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name, str(default))
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return default
+
+
 FIRST_RUN_LOGIN = False
 AUTH_URL = "https://gmgn.ai/tglogin?user_id=53b06598-3e2b-4d2f-aec6-f2e5881def90&code=41585435-24af-4131-b275-0aab311da4a3&id=0eae54fb142533ac"
 
@@ -20,12 +29,28 @@ WATCHDOG_POLL_INTERVAL = 5
 XVFB_WIDTH = 1920
 XVFB_HEIGHT = 1080
 
+# ---------- GMGN 上游 WebSocket 降噪 ----------
+# 页面会订阅一些高频行情频道（例如 chain_stat），这些频道与 Twitter 监控无关，
+# 但会让 Playwright 的 WS frame 回调非常繁忙。默认拦截这些订阅，并保留帧统计日志。
+GMGN_BLOCK_WS_SUBSCRIBE_CHANNELS = [
+    ch.strip()
+    for ch in os.getenv("GMGN_BLOCK_WS_SUBSCRIBE_CHANNELS", "chain_stat").split(",")
+    if ch.strip()
+]
+GMGN_WS_FRAME_STATS_INTERVAL = _int_env("GMGN_WS_FRAME_STATS_INTERVAL", 60)
+GMGN_TARGET_CHANNEL = os.getenv("GMGN_TARGET_CHANNEL", "twitter_user_monitor_basic")
+DIAG_HANDLES = {
+    h.strip().lower()
+    for h in os.getenv("DIAG_HANDLES", "heyibinance,heyi,cz_binance,cz,elonmusk").split(",")
+    if h.strip()
+}
+
 # ---------- WebSocket 分发配置 ----------
 WS_ENABLE = os.getenv("WS_ENABLE", "False").lower() in ("true", "1", "yes")
 WS_HOST = os.getenv("WS_HOST", "0.0.0.0")
-WS_PORT = int(os.getenv("WS_PORT", "8765"))
+WS_PORT = _int_env("WS_PORT", 8765)
 WS_TOKEN = os.getenv("WS_TOKEN", "change-me-to-a-strong-token")
-WS_HEARTBEAT_INTERVAL = int(os.getenv("WS_HEARTBEAT_INTERVAL", "30"))
+WS_HEARTBEAT_INTERVAL = _int_env("WS_HEARTBEAT_INTERVAL", 30)
 
 # ---------- Telegram 推送配置 ----------
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")

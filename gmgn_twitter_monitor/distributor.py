@@ -16,8 +16,30 @@ import websockets
 from loguru import logger
 from websockets.server import WebSocketServerProtocol
 
+from . import config as cfg
+
 
 TEXT_ENRICHMENT_ACTIONS = {"tweet", "reply", "quote", "repost"}
+
+
+def _diag_enabled(message_or_handle) -> bool:
+    if isinstance(message_or_handle, dict):
+        handle = (message_or_handle.get("author") or {}).get("handle") or ""
+    else:
+        handle = str(message_or_handle or "")
+    return handle.lower() in cfg.DIAG_HANDLES
+
+
+def _diag_log(message_or_handle, text: str, *, level: str = "info") -> None:
+    if not _diag_enabled(message_or_handle):
+        return
+    handle = (
+        ((message_or_handle.get("author") or {}).get("handle") or "")
+        if isinstance(message_or_handle, dict)
+        else str(message_or_handle or "")
+    )
+    log = getattr(logger, level)
+    log(f"🔎 诊断下游: @{handle} {text}")
 
 
 def _is_instagram_message(message: dict) -> bool:
@@ -652,11 +674,13 @@ class TelegramDistributor(BaseDistributor):
 
     async def _distribute_to_channel(self, message: dict, handle: str, action: str, target_channel_id: str, time_log_str: str) -> dict | None:
         """推送原文到单个频道，返回推送上下文（含 msg_id）供后续翻译编辑使用。"""
+        _diag_log(message, f"TG 准备发送 channel={target_channel_id} action={action}")
         # ──── photo 动作：由于 FxTwitter 无法展示换头像前后的两张图，需要保留 sendMediaGroup ────
         if action == "photo":
             if await self._send_media_change_group(
                 message, handle, target_channel_id, time_log_str, "avatar_change", "头像变更"
             ):
+                _diag_log(message, f"TG media group 已发送 channel={target_channel_id} action=photo")
                 return None  # photo 动作不需要后续翻译编辑
 
         # ──── banner 动作：展示横幅前后对比图 ────
@@ -664,6 +688,7 @@ class TelegramDistributor(BaseDistributor):
             if await self._send_media_change_group(
                 message, handle, target_channel_id, time_log_str, "banner_change", "横幅变更"
             ):
+                _diag_log(message, f"TG media group 已发送 channel={target_channel_id} action=banner")
                 return None  # banner 动作不需要后续翻译编辑
 
         # ──── 计算时间尾部 + 帖子链接 ────
@@ -724,6 +749,9 @@ class TelegramDistributor(BaseDistributor):
                     "channel_id": target_channel_id,
                     "link_preview_options": link_preview_options,
                 }
+            _diag_log(message, f"TG sendMessage 成功但缺少 message_id channel={target_channel_id}", level="warning")
+        else:
+            _diag_log(message, f"TG sendMessage 失败 channel={target_channel_id}", level="warning")
         return None
 
     async def _pre_translate(self, message: dict) -> dict[str, str] | None:
@@ -779,12 +807,15 @@ class TelegramDistributor(BaseDistributor):
             kws = handle_filter_map.get(cid, [])
             sent_key = (message.get("_internal_id") or message.get("tweet_id") or "", cid)
             if sent_key[0] and sent_key in self._filtered_sent_keys:
+                _diag_log(message, f"TG赛道过滤跳过: 频道 {cid} 已补发过")
                 logger.debug(f"📱 TG赛道过滤: @{h_lower} 已推送过频道 {cid}，跳过重复补发")
                 continue
             if not category:
+                _diag_log(message, f"TG赛道过滤跳过: 无 AI category channel={cid}")
                 logger.debug(f"📱 TG赛道过滤: @{h_lower} 无 AI category，跳过频道 {cid}")
                 continue
             if not self._track_matches(category, kws):
+                _diag_log(message, f"TG赛道过滤跳过: category='{category}' 不含 {kws} channel={cid}")
                 logger.debug(f"📱 TG赛道过滤: @{h_lower} category='{category}' 不含 {kws}，跳过频道 {cid}")
                 continue
             if sent_key[0]:
@@ -792,6 +823,7 @@ class TelegramDistributor(BaseDistributor):
             passed_filtered.append(cid)
 
         if not passed_filtered:
+            _diag_log(message, f"TG赛道过滤: 无命中频道 filtered={filtered_channels}")
             return
 
         filtered_push_tasks = [
@@ -825,24 +857,29 @@ class TelegramDistributor(BaseDistributor):
 
     async def distribute(self, message: dict) -> None:
         if not self._session:
+            _diag_log(message, "TG 跳过: session 未启动", level="warning")
             return
         if not self._should_forward(message):
+            _diag_log(message, f"TG 跳过: 不在白名单 filter={self.filter_handles}", level="warning")
             return
 
         handle = message.get("author", {}).get("handle", "?")
         action = message.get("action", "")
         target = message.get("_dispatch_target")
         internal_id = message.get("_internal_id")
+        _diag_log(message, f"TG 进入分发 target={target} action={action} internal_id={internal_id or ''}")
 
         # 核心：动态路由
         h_lower = handle.lower()
         target_channel_ids = self.channel_map.get(h_lower, [])
         if not target_channel_ids:
             if not self.enable_default:
+                _diag_log(message, "TG 跳过: 无路由且默认频道未启用", level="warning")
                 return
             target_channel_ids = [self.default_channel_id] if self.default_channel_id else []
 
         if not target_channel_ids:
+            _diag_log(message, "TG 跳过: 目标频道列表为空", level="warning")
             return
 
         # ── 按赛道过滤规则拆分频道 ──
@@ -852,6 +889,11 @@ class TelegramDistributor(BaseDistributor):
         _handle_filter_map = _cfg.TG_CHANNEL_TRACK_FILTER.get(h_lower, {})
         normal_channels = [cid for cid in target_channel_ids if cid not in _handle_filter_map]
         filtered_channels = [cid for cid in target_channel_ids if cid in _handle_filter_map]
+        _diag_log(
+            message,
+            f"TG 路由: targets={target_channel_ids} normal={normal_channels} "
+            f"filtered={filtered_channels} track_filter={_handle_filter_map}"
+        )
 
         tz_cst = timezone(timedelta(hours=8))
         ts = message.get("timestamp", 0)
@@ -861,6 +903,7 @@ class TelegramDistributor(BaseDistributor):
 
         if target == "TG_UPDATE":
             if not _should_run_text_enrichment(message):
+                _diag_log(message, f"TG_UPDATE 跳过: 非文本增强动作 action={action}")
                 logger.debug(f"📱 TG_UPDATE 跳过非正文动作: {action}")
                 return
 
@@ -873,6 +916,7 @@ class TelegramDistributor(BaseDistributor):
                 else:
                     push_contexts = history
             elif not filtered_channels:
+                _diag_log(message, f"TG_UPDATE 跳过: 找不到 _msg_history internal_id={internal_id}", level="warning")
                 logger.warning(f"📱 TG_UPDATE 找不到 _msg_history: {internal_id[:20] if internal_id else 'None'}")
                 return
 
@@ -880,6 +924,7 @@ class TelegramDistributor(BaseDistributor):
             translate_result = await translate_task if translate_task else None
 
             if not translate_result or isinstance(translate_result, Exception):
+                _diag_log(message, "TG_UPDATE 跳过: 翻译/分析结果为空或异常", level="warning")
                 logger.warning("📱 TG_UPDATE 翻译/分析结果为空或异常，跳过编辑与赛道过滤推送")
                 return
 
@@ -900,11 +945,13 @@ class TelegramDistributor(BaseDistributor):
                 try:
                     push_contexts = await asyncio.wait_for(asyncio.shield(history_future), timeout=20)
                 except asyncio.TimeoutError:
+                    _diag_log(message, f"TG_UPDATE 跳过编辑: 等待普通频道推送结果超时 internal_id={internal_id}", level="warning")
                     logger.warning(f"📱 TG_UPDATE 等待普通频道推送结果超时，跳过编辑: {internal_id[:20] if internal_id else 'None'}")
                     push_contexts = []
 
             if not push_contexts:
                 if not filtered_channels:
+                    _diag_log(message, "TG_UPDATE 跳过编辑: push_contexts 为空", level="warning")
                     logger.warning("📱 TG_UPDATE push_contexts 为空，跳过编辑")
                 return
 
@@ -942,7 +989,15 @@ class TelegramDistributor(BaseDistributor):
             try:
                 all_results = await asyncio.gather(*push_tasks, return_exceptions=True) if push_tasks else []
                 valid_push_contexts = [r for r in all_results if isinstance(r, dict) and "msg_id" in r]
-            except Exception:
+                exceptions = [r for r in all_results if isinstance(r, Exception)]
+                fail_count = len(all_results) - len(valid_push_contexts) - len(exceptions)
+                _diag_log(
+                    message,
+                    f"TG_FAST 完成: normal_channels={normal_channels} "
+                    f"success={len(valid_push_contexts)} fail={fail_count} exceptions={len(exceptions)}"
+                )
+            except Exception as e:
+                _diag_log(message, f"TG_FAST 异常: {e}", level="error")
                 valid_push_contexts = []
 
             # 设置 Future 结果，解除 TG_UPDATE 的 await 阻塞
@@ -974,6 +1029,13 @@ class TelegramDistributor(BaseDistributor):
         for r in push_results:
             if isinstance(r, dict) and "msg_id" in r:
                 valid_push_contexts.append(r)
+        push_exceptions = [r for r in push_results if isinstance(r, Exception)]
+        _diag_log(
+            message,
+            f"TG DEFAULT式推送完成: normal_channels={normal_channels} "
+            f"success={len(valid_push_contexts)} exceptions={len(push_exceptions)} "
+            f"translate_result={'exception' if isinstance(translate_result, Exception) else bool(translate_result)}"
+        )
 
         if internal_id and valid_push_contexts:
             self._msg_history[internal_id] = valid_push_contexts
@@ -1320,22 +1382,35 @@ class FeishuDistributor(BaseDistributor):
 
     async def distribute(self, message: dict) -> None:
         if not self._session:
+            _diag_log(message, "飞书跳过: session 未启动", level="warning")
             return
         if not self._should_forward(message):
+            _diag_log(message, f"飞书跳过: 不在白名单 filter={self.filter_handles}", level="warning")
             return
 
         handle = message.get("author", {}).get("handle", "?").lower()
+        action = message.get("action", "")
+        target = message.get("_dispatch_target")
+        internal_id = message.get("_internal_id")
+        _diag_log(message, f"飞书进入分发 target={target} action={action} internal_id={internal_id or ''}")
         
         # 查找目标配置
         target_configs = self.channel_map.get(handle, [])
         if not target_configs:
             if not self.enable_default:
+                _diag_log(message, "飞书跳过: 无路由且默认 webhook 未启用", level="warning")
                 return
             if self.default_webhook:
                 target_configs = [{"webhook": self.default_webhook, "secret": self.default_secret}]
         
         if not target_configs:
+            _diag_log(message, "飞书跳过: 目标 webhook 列表为空", level="warning")
             return
+        _diag_log(
+            message,
+            f"飞书路由: targets={[conf.get('webhook', '')[-20:] for conf in target_configs]} "
+            f"has_track_filter={any(conf.get('track_filter') for conf in target_configs)}"
+        )
 
         # 时间日志
         tz_cst = timezone(timedelta(hours=8))
@@ -1405,15 +1480,22 @@ class FeishuDistributor(BaseDistributor):
                 if track_filter:
                     category = translated_dict.get("category", "")
                     if not category:
+                        _diag_log(message, f"飞书赛道过滤跳过: 无 AI category webhook={conf['webhook'][-20:]}")
                         logger.debug(f"📱 赛道过滤: @{handle} 无 AI category，跳过 webhook={conf['webhook'][-20:]}")
                         continue
                     if not TelegramDistributor._track_matches(category, track_filter):
+                        _diag_log(
+                            message,
+                            f"飞书赛道过滤跳过: category='{category}' 不含 {track_filter} "
+                            f"webhook={conf['webhook'][-20:]}"
+                        )
                         logger.debug(f"📱 赛道过滤: @{handle} category='{category}' 不含 {track_filter}，跳过")
                         continue
                 filtered_configs.append(conf)
 
             target_configs = filtered_configs
             if not target_configs:
+                _diag_log(message, "飞书赛道过滤: 无命中 webhook", level="warning")
                 return
 
             upload_tasks = [self._upload_image(url) for url in photo_urls]
@@ -1490,6 +1572,14 @@ class FeishuDistributor(BaseDistributor):
 
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
+            success_count = sum(1 for result in results if result is True)
+            exception_count = sum(1 for result in results if isinstance(result, Exception))
+            fail_count = len(results) - success_count - exception_count
+            _diag_log(
+                message,
+                f"飞书发送完成: targets={len(target_configs)} success={success_count} "
+                f"fail={fail_count} exceptions={exception_count}"
+            )
             if self.storage:
                 for conf, result in zip(target_configs, results):
                     if result is True:
@@ -1897,10 +1987,27 @@ class DistributorHub:
                     tasks.append(distributor.distribute(message))
                     task_distributors.append(distributor)
 
+        _diag_log(
+            message,
+            f"Hub 任务选择: target={target} distributors="
+            f"{[type(d).__name__ for d in task_distributors]}"
+        )
         if not tasks:
+            _diag_log(message, f"Hub 跳过: target={target} 无可执行 distributor", level="warning")
             return
             
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        exception_count = sum(1 for result in results if isinstance(result, Exception))
+        _diag_log(
+            message,
+            f"Hub 任务完成: target={target} distributors={len(task_distributors)} "
+            f"exceptions={exception_count}"
+        )
         for distributor, result in zip(task_distributors, results):
             if isinstance(result, Exception):
+                _diag_log(
+                    message,
+                    f"Hub distributor 异常: {type(distributor).__name__} - {result}",
+                    level="error",
+                )
                 logger.error(f"❌ 分发失败: {type(distributor).__name__} - {result}")

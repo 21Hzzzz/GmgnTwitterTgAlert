@@ -7,6 +7,7 @@ import os
 import signal
 import subprocess
 import time
+from collections import Counter
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 
@@ -168,6 +169,24 @@ class MessageDeduplicator:
         )
         return f"{identity_key}:{fingerprint}"
 
+    @staticmethod
+    def _diag_handle(raw_item: dict) -> str:
+        u_data = raw_item.get("u") or {}
+        handle = (u_data.get("s") or "").lower()
+        return handle if handle in config.DIAG_HANDLES else ""
+
+    @staticmethod
+    def _diag_item_summary(raw_item: dict) -> str:
+        content = raw_item.get("c") if isinstance(raw_item.get("c"), dict) else {}
+        reference = raw_item.get("sc") if isinstance(raw_item.get("sc"), dict) else {}
+        ref_user = raw_item.get("su") if isinstance(raw_item.get("su"), dict) else {}
+        return (
+            f"action={raw_item.get('tw') or 'unknown'} cp={raw_item.get('cp')} "
+            f"pf={raw_item.get('pf')} internal_id={raw_item.get('i') or ''} "
+            f"tweet_id={raw_item.get('ti') or ''} ref=@{ref_user.get('s') or ''} "
+            f"content_len={len(content.get('t') or '')} ref_len={len(reference.get('t') or '')}"
+        )
+
     def process(self, raw_item: dict) -> None:
         """处理一条原始 gmgn 数据项。"""
         internal_id = self._dedup_identity(raw_item)
@@ -175,11 +194,16 @@ class MessageDeduplicator:
             return
 
         cp = raw_item.get("cp")
+        diag_handle = self._diag_handle(raw_item)
+        if diag_handle:
+            logger.info(f"🔎 诊断原始入站: @{diag_handle} {self._diag_item_summary(raw_item)}")
 
         # --- 1. TG 实时推送 & 5s 更新逻辑 ---
         if internal_id not in self._processed_tg_ids:
             self._processed_tg_ids.add(internal_id)
             self._mark_history(internal_id)
+            if diag_handle:
+                logger.info(f"🔎 诊断去重: @{diag_handle} 首次进入 TG_FAST dispatch_id={internal_id}")
             self._dispatch(raw_item, target="TG_FAST")
 
             if cp != 1:
@@ -190,14 +214,25 @@ class MessageDeduplicator:
                     internal_id,
                 )
                 self._pending_update[internal_id] = (raw_item, timer)
+                if diag_handle:
+                    logger.info(f"🔎 诊断去重: @{diag_handle} 等待 cp=1 TG_UPDATE dispatch_id={internal_id}")
             else:
                 # cp=1 直接到达：完整版已在手，立即触发 TG_UPDATE 进行翻译编辑
+                if diag_handle:
+                    logger.info(f"🔎 诊断去重: @{diag_handle} cp=1 直接进入 TG_UPDATE dispatch_id={internal_id}")
                 self._dispatch(raw_item, target="TG_UPDATE")
 
         elif cp == 1 and internal_id in self._pending_update:
             _, timer = self._pending_update.pop(internal_id)
             timer.cancel()
+            if diag_handle:
+                logger.info(f"🔎 诊断去重: @{diag_handle} 收到 cp=1，触发 TG_UPDATE dispatch_id={internal_id}")
             self._dispatch(raw_item, target="TG_UPDATE")
+        elif diag_handle:
+            logger.info(
+                f"🔎 诊断去重: @{diag_handle} TG 已处理过且无需更新 "
+                f"cp={cp} dispatch_id={internal_id}"
+            )
 
         # --- 2. 其他默认渠道的 0.5s 延迟去重逻辑 ---
         if internal_id not in self._processed_feishu_ids:
@@ -207,6 +242,8 @@ class MessageDeduplicator:
                     timer.cancel()
                 self._processed_feishu_ids.add(internal_id)
                 self._mark_history(internal_id)
+                if diag_handle:
+                    logger.info(f"🔎 诊断去重: @{diag_handle} 进入 DEFAULT dispatch_id={internal_id}")
                 self._dispatch(raw_item, target="DEFAULT")
             else:
                 if internal_id not in self._pending_feishu:
@@ -217,6 +254,10 @@ class MessageDeduplicator:
                         internal_id,
                     )
                     self._pending_feishu[internal_id] = (raw_item, timer)
+                    if diag_handle:
+                        logger.info(f"🔎 诊断去重: @{diag_handle} DEFAULT 等待 cp=1 dispatch_id={internal_id}")
+        elif diag_handle:
+            logger.info(f"🔎 诊断去重: @{diag_handle} DEFAULT 已处理过 dispatch_id={internal_id}")
 
     def _timeout_feishu(self, internal_id: str) -> None:
         """超时兜底：完整版没来，用快照版推送，保证不丢消息。"""
@@ -261,9 +302,41 @@ class MessageDeduplicator:
             summary_text += _build_delay_string(raw_item.get("ts", 0))
 
             logger.info(f"✨ 标准化推送 ({target}) {log_tag} | {summary_text}")
+            if (message.author.handle or "").lower() in config.DIAG_HANDLES:
+                content_text = (standardized_msg.get("content") or {}).get("text") or ""
+                ref_text = (standardized_msg.get("reference") or {}).get("text") or ""
+                logger.info(
+                    f"🔎 诊断标准化: @{message.author.handle} target={target} "
+                    f"dispatch_id={dispatch_id} source_id={raw_item.get('i') or ''} "
+                    f"action={message.action} tweet_id={message.tweet_id or ''} "
+                    f"content_len={len(content_text)} ref_len={len(ref_text)}"
+                )
             task = asyncio.create_task(self._publish(standardized_msg))
             self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
+
+            def _done_callback(done_task: asyncio.Task) -> None:
+                self._background_tasks.discard(done_task)
+                if (message.author.handle or "").lower() not in config.DIAG_HANDLES:
+                    return
+                if done_task.cancelled():
+                    logger.warning(
+                        f"🔎 诊断发布任务被取消: @{message.author.handle} "
+                        f"target={target} dispatch_id={dispatch_id}"
+                    )
+                    return
+                exc = done_task.exception()
+                if exc:
+                    logger.error(
+                        f"🔎 诊断发布任务异常: @{message.author.handle} "
+                        f"target={target} dispatch_id={dispatch_id}: {exc}"
+                    )
+                else:
+                    logger.info(
+                        f"🔎 诊断发布任务完成: @{message.author.handle} "
+                        f"target={target} dispatch_id={dispatch_id}"
+                    )
+
+            task.add_done_callback(_done_callback)
         except Exception as e:
             logger.error(f"❌ 数据标准化失败: {e}")
 
@@ -333,8 +406,7 @@ def _decode_ws_frame_text(frame_data: Any) -> str:
     return frame_data if isinstance(frame_data, str) else str(frame_data)
 
 
-def _is_heartbeat_frame(frame_data: Any) -> bool:
-    text = _decode_ws_frame_text(frame_data)
+def _is_heartbeat_text(text: str) -> bool:
     if not text:
         return False
     if text in {"2", "3", "2probe", "3probe"}:
@@ -348,6 +420,27 @@ def _is_heartbeat_frame(frame_data: Any) -> bool:
     return parsed.get("action") == "heartbeat" or parsed.get("channel") == "heartbeat"
 
 
+def _is_heartbeat_frame(frame_data: Any) -> bool:
+    return _is_heartbeat_text(_decode_ws_frame_text(frame_data))
+
+
+def _extract_channel_hint(text: str) -> str:
+    marker = '"channel"'
+    idx = text.find(marker)
+    if idx == -1:
+        return ""
+    colon_idx = text.find(":", idx + len(marker))
+    if colon_idx == -1:
+        return ""
+    quote_start = text.find('"', colon_idx + 1)
+    if quote_start == -1:
+        return ""
+    quote_end = text.find('"', quote_start + 1)
+    if quote_end == -1:
+        return ""
+    return text[quote_start + 1:quote_end]
+
+
 def _format_ws_frame_preview(frame_data: Any, limit: int = 200) -> str:
     if isinstance(frame_data, bytes):
         try:
@@ -359,6 +452,64 @@ def _format_ws_frame_preview(frame_data: Any, limit: int = 200) -> str:
     text = str(frame_data)
     suffix = "..." if len(text) > limit else ""
     return f"{type(frame_data).__name__}(len={len(text)}): {text[:limit]!r}{suffix}"
+
+
+class WSFrameStats:
+    def __init__(self, interval_seconds: int):
+        self.interval_seconds = max(1, interval_seconds)
+        self.window_start = time.time()
+        self.total = 0
+        self.sent = 0
+        self.received = 0
+        self.heartbeats = 0
+        self.target = 0
+        self.skipped = 0
+        self.channels = Counter()
+
+    def record(self, direction: str, text: str, kind: str) -> None:
+        self.total += 1
+        if direction == "sent":
+            self.sent += 1
+        else:
+            self.received += 1
+
+        if kind == "heartbeat":
+            self.heartbeats += 1
+        elif kind == "target":
+            self.target += 1
+        elif kind == "skipped":
+            self.skipped += 1
+
+        channel = _extract_channel_hint(text)
+        if channel:
+            self.channels[channel] += 1
+
+        self.maybe_log()
+
+    def maybe_log(self) -> None:
+        now = time.time()
+        if now - self.window_start < self.interval_seconds:
+            return
+
+        top_channels = ", ".join(
+            f"{channel}:{count}" for channel, count in self.channels.most_common(5)
+        ) or "none"
+        logger.info(
+            "📊 GMGN WS帧统计 "
+            f"{int(now - self.window_start)}s | total={self.total} "
+            f"sent={self.sent} received={self.received} "
+            f"target={self.target} skipped={self.skipped} "
+            f"heartbeat={self.heartbeats} top_channels=[{top_channels}]"
+        )
+
+        self.window_start = now
+        self.total = 0
+        self.sent = 0
+        self.received = 0
+        self.heartbeats = 0
+        self.target = 0
+        self.skipped = 0
+        self.channels.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -441,12 +592,17 @@ async def main():
     vdisplay = Xvfb(width=config.XVFB_WIDTH, height=config.XVFB_HEIGHT)
     vdisplay.start()
 
-    # 注册 SIGTERM 处理器（systemd stop / kill 均会触发）
+    # 注册停止信号处理器（systemd stop / kill 均会触发）
     loop = asyncio.get_event_loop()
-    loop.add_signal_handler(
-        signal.SIGTERM,
-        lambda: loop.call_soon_threadsafe(loop.stop),
-    )
+    shutdown_event = asyncio.Event()
+
+    def request_shutdown() -> None:
+        if not shutdown_event.is_set():
+            logger.info("收到停止信号，准备优雅退出...")
+            shutdown_event.set()
+
+    loop.add_signal_handler(signal.SIGTERM, request_shutdown)
+    loop.add_signal_handler(signal.SIGINT, request_shutdown)
 
     browser = BrowserManager()
     watchdog = Watchdog(config.WATCHDOG_TIMEOUT)
@@ -460,6 +616,7 @@ async def main():
     heartbeat_count = 0
     last_heartbeat_log = 0.0
     raw_heartbeat_log_count = 0
+    frame_stats = WSFrameStats(config.GMGN_WS_FRAME_STATS_INTERVAL)
 
     try:
         await storage.start()
@@ -474,28 +631,44 @@ async def main():
                 watchdog.feed()
                 watchdog_timeout_count = 0
 
-            def handle_ws_activity_frame(frame_data, direction: str) -> bool:
+            def handle_ws_activity_frame(text: str, direction: str) -> bool:
                 nonlocal heartbeat_count, last_heartbeat_log, raw_heartbeat_log_count
                 feed_upstream_activity(f"ws_{direction}")
-                preview = _format_ws_frame_preview(frame_data)
-                if _is_heartbeat_frame(frame_data):
+                if _is_heartbeat_text(text):
                     heartbeat_count += 1
+                    frame_stats.record(direction, text, "heartbeat")
                     now = time.time()
                     if raw_heartbeat_log_count < 4 or now - last_heartbeat_log >= 60:
                         raw_heartbeat_log_count += 1
                         last_heartbeat_log = now
+                        preview = _format_ws_frame_preview(text)
                         logger.info(
                             f"💓 GMGN WS 心跳包 #{heartbeat_count} {direction}: {preview}"
                         )
                     return True
                 return False
 
+            def handle_ws_sent_frame(frame_data):
+                text = _decode_ws_frame_text(frame_data)
+                if handle_ws_activity_frame(text, "sent"):
+                    return
+                if config.GMGN_TARGET_CHANNEL not in text:
+                    frame_stats.record("sent", text, "skipped")
+                    return
+                frame_stats.record("sent", text, "target")
+
             def handle_ws_frame(frame_data):
-                if handle_ws_activity_frame(frame_data, "received"):
+                text = _decode_ws_frame_text(frame_data)
+                if handle_ws_activity_frame(text, "received"):
                     return
                 feed_upstream_activity("ws_message")
+                if config.GMGN_TARGET_CHANNEL not in text:
+                    frame_stats.record("received", text, "skipped")
+                    return
+
+                frame_stats.record("received", text, "target")
                 try:
-                    parsed = parse_socketio_payload(frame_data)
+                    parsed = parse_socketio_payload(text)
                     if not parsed:
                         return
 
@@ -520,7 +693,7 @@ async def main():
 
                     watchdog_timeout_count = 0
                     feed_upstream_activity("ws_connected")
-                    ws.on("framesent", lambda frame: handle_ws_activity_frame(frame, "sent"))
+                    ws.on("framesent", lambda frame: handle_ws_sent_frame(frame))
                     ws.on("framereceived", lambda frame: handle_ws_frame(frame))
                     ws.on("close", lambda _: connected_ws.discard(ws.url))
                 elif "gmgn.ai" in ws.url and ignored_ws_log_count < 5:
@@ -596,8 +769,15 @@ async def main():
                 f"进入挂机监听模式... (已配置 {config.WATCHDOG_TIMEOUT}s 看门狗，按 Ctrl+C 终止)"
             )
 
-            while True:
-                await asyncio.sleep(config.WATCHDOG_POLL_INTERVAL)
+            while not shutdown_event.is_set():
+                try:
+                    await asyncio.wait_for(
+                        shutdown_event.wait(),
+                        timeout=config.WATCHDOG_POLL_INTERVAL,
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    pass
                 if watchdog.is_timed_out():
                     time_since_last_msg = watchdog.time_since_last_msg()
                     watchdog_timeout_count += 1
@@ -617,6 +797,11 @@ async def main():
                         watchdog.feed()
                     except Exception as e:
                         logger.error(f"刷新重连时发生异常: {e}")
+    except Exception as e:
+        if shutdown_event.is_set() and "Target page, context or browser has been closed" in str(e):
+            logger.info("停止期间浏览器上下文已关闭，忽略 Playwright 关闭信号。")
+        else:
+            raise
     finally:
         await summary_scheduler.stop()
         await hub.stop_all()
