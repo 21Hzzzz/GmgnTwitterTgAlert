@@ -638,7 +638,10 @@ async def main():
                     heartbeat_count += 1
                     frame_stats.record(direction, text, "heartbeat")
                     now = time.time()
-                    if raw_heartbeat_log_count < 4 or now - last_heartbeat_log >= 60:
+                    if (
+                        raw_heartbeat_log_count < 4
+                        or now - last_heartbeat_log >= max(1, config.GMGN_HEARTBEAT_LOG_INTERVAL)
+                    ):
                         raw_heartbeat_log_count += 1
                         last_heartbeat_log = now
                         preview = _format_ws_frame_preview(text)

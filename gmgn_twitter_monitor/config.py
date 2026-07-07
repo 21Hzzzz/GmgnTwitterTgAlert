@@ -37,7 +37,8 @@ GMGN_BLOCK_WS_SUBSCRIBE_CHANNELS = [
     for ch in os.getenv("GMGN_BLOCK_WS_SUBSCRIBE_CHANNELS", "chain_stat").split(",")
     if ch.strip()
 ]
-GMGN_WS_FRAME_STATS_INTERVAL = _int_env("GMGN_WS_FRAME_STATS_INTERVAL", 60)
+GMGN_WS_FRAME_STATS_INTERVAL = _int_env("GMGN_WS_FRAME_STATS_INTERVAL", 600)
+GMGN_HEARTBEAT_LOG_INTERVAL = _int_env("GMGN_HEARTBEAT_LOG_INTERVAL", 600)
 GMGN_TARGET_CHANNEL = os.getenv("GMGN_TARGET_CHANNEL", "twitter_user_monitor_basic")
 DIAG_HANDLES = {
     h.strip().lower()

@@ -143,6 +143,8 @@ python3 ctl.py restart
 | `WS_HOST` | ❌ | WebSocket 监听地址，默认 `0.0.0.0` |
 | `WS_PORT` | ❌ | WebSocket 监听端口，默认 `8765` |
 | `WS_HEARTBEAT_INTERVAL` | ❌ | WebSocket 心跳间隔秒数，默认 `30` |
+| `GMGN_WS_FRAME_STATS_INTERVAL` | ❌ | GMGN 上游 WS 帧统计日志间隔秒数，默认 `600` |
+| `GMGN_HEARTBEAT_LOG_INTERVAL` | ❌ | GMGN 上游心跳包详情日志间隔秒数，默认 `600` |
 | `TG_BOT_TOKEN` | ✅ | Telegram Bot API Token |
 | `FEISHU_APP_ID` | ❌ | 飞书企业自建应用 App ID (用于卡片原图提取与上传) |
 | `FEISHU_APP_SECRET` | ❌ | 飞书企业自建应用 App Secret |
@@ -483,7 +485,8 @@ def verify_signature(body: bytes, secret: str, received_signature: str) -> bool:
 | 翻译 | `.env → DEEPSEEK_API_KEY` |
 | Webhook | `.env → WEBHOOK_URL` |
 | Instagram Webhook | `.env → INSTAGRAM_WEBHOOK_URL` + `INSTAGRAM_WEBHOOK_API_KEY` |
-| 心跳间隔 | 30 秒 |
+| 对外 WS 心跳间隔 | 30 秒 |
+| GMGN 上游心跳日志 | 10 分钟 |
 | 看门狗超时 | 120 秒（无消息自动刷新页面） |
 | 服务自动重启 | 每 12 小时（`RuntimeMaxSec=43200`） |
 | 监控目标 | `gmgn.ai/follow?target=xTracker&chain=bsc` |

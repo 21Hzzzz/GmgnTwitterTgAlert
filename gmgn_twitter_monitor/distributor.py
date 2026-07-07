@@ -537,7 +537,18 @@ class TelegramDistributor(BaseDistributor):
         else:
             logger.warning(f"📌 TG 频道摘要置顶失败 -> {target_channel_id} #{message_id}")
 
-    async def _translate_and_edit(self, message_id: int, header_no_text: str, footer: str, message: dict, translated_dict: dict[str, str], target_channel_id: str, link_preview_options: dict | None = None) -> None:
+    async def _translate_and_edit(
+        self,
+        message_id: int,
+        header_no_text: str,
+        footer: str,
+        message: dict,
+        translated_dict: dict[str, str],
+        target_channel_id: str,
+        link_preview_options: dict | None = None,
+        current_text: str | None = None,
+        current_link_preview_options: dict | None = None,
+    ) -> None:
         """使用预翻译结果编辑已发送的 TG 消息，替换英文正文为中文。"""
         content = message.get("content", {}) or {}
         reference = message.get("reference") or {}
@@ -560,13 +571,37 @@ class TelegramDistributor(BaseDistributor):
         category = translated_dict.get("category", "")
         summary = translated_dict.get("summary", "")
 
-        # 判断内容是否真的有改变（分析结果也算改变）
+        # 判断内容是否真的有改变（分析结果也算改变）。如果没有翻译差异，
+        # 仍然刷新为 cp=1 完整版，避免 TG_FAST 快照缺少 reply/quote 原文。
         has_analysis = bool(category or summary)
         if (not has_analysis and
             main_text == text_parts.get("content", "") and 
             ref_text == text_parts.get("reference", "") and 
             bio_text == text_parts.get("bio", "")):
-            logger.info(f"🌐 翻译结果与原文相同，跳过编辑: {target_channel_id}")
+            base_text = f"{self._format_message(message)}\n\n{footer}"
+            if (
+                current_text
+                and base_text[:4096] == current_text[:4096]
+                and (link_preview_options or {}) == (current_link_preview_options or {})
+            ):
+                logger.info(f"🌐 翻译结果与原文相同，完整版无需刷新: {target_channel_id}")
+                return
+
+            payload = {
+                "chat_id": target_channel_id,
+                "message_id": message_id,
+                "text": base_text[:4096],
+                "parse_mode": "HTML",
+            }
+            if link_preview_options:
+                payload["link_preview_options"] = link_preview_options
+
+            result = await self._send_api("editMessageText", payload)
+            handle = message.get("author", {}).get("handle", "?")
+            if result and result.get("ok"):
+                logger.info(f"📱 TG 完整版刷新成功: @{handle} -> {target_channel_id}")
+            else:
+                logger.warning(f"📱 TG 完整版刷新失败: @{handle} -> {target_channel_id}")
             return
 
         def format_part(translated: str, original: str, is_ref: bool = False) -> str:
@@ -608,7 +643,8 @@ class TelegramDistributor(BaseDistributor):
         translated_html = "\n\n".join(translated_html_parts)
         
         separator = "—— 🌐 中文翻译 ——\n" if not has_analysis else "—— 🧠 AI 分析 + 翻译 ——\n"
-        new_text = f"{header_no_text}\n\n{separator}{analysis_block}{translated_html}\n\n{footer}"
+        current_header_no_text = self._format_message(message, include_text=False)
+        new_text = f"{current_header_no_text}\n\n{separator}{analysis_block}{translated_html}\n\n{footer}"
 
         handle = message.get("author", {}).get("handle", "?")
 
@@ -629,6 +665,17 @@ class TelegramDistributor(BaseDistributor):
             logger.info(f"{log_tag}追加成功: @{handle} -> {target_channel_id}")
         else:
             logger.warning(f"🌐 TG 翻译追加失败: @{handle} -> {target_channel_id}")
+
+    def _build_footer(self, message: dict, handle: str, action: str) -> str:
+        tz_cst = timezone(timedelta(hours=8))
+        ts = message.get("timestamp", 0)
+        tweet_time = datetime.fromtimestamp(ts, tz=tz_cst).strftime("%Y-%m-%d %H:%M:%S") if ts else "未知"
+        footer = f"🕒 推文时间: {tweet_time}"
+
+        tweet_url = self._build_tweet_url(message, handle, action)
+        if tweet_url:
+            footer += f"\n🔗 <a href=\"{tweet_url}\">查看原文</a>"
+        return footer
 
     async def _send_media_change_group(
         self,
@@ -692,15 +739,7 @@ class TelegramDistributor(BaseDistributor):
                 return None  # banner 动作不需要后续翻译编辑
 
         # ──── 计算时间尾部 + 帖子链接 ────
-        tz_cst = timezone(timedelta(hours=8))
-        ts = message.get("timestamp", 0)
-        tweet_time = datetime.fromtimestamp(ts, tz=tz_cst).strftime("%Y-%m-%d %H:%M:%S") if ts else "未知"
-        footer = f"🕒 推文时间: {tweet_time}"
-
-        # 附带帖子原文链接
-        tweet_url = self._build_tweet_url(message, handle, action)
-        if tweet_url:
-            footer += f"\n🔗 <a href=\"{tweet_url}\">查看原文</a>"
+        footer = self._build_footer(message, handle, action)
 
         # ──── 头部与正文 ────
         header = self._format_message(message)
@@ -748,6 +787,7 @@ class TelegramDistributor(BaseDistributor):
                     "footer": footer,
                     "channel_id": target_channel_id,
                     "link_preview_options": link_preview_options,
+                    "initial_text": initial_text[:4096],
                 }
             _diag_log(message, f"TG sendMessage 成功但缺少 message_id channel={target_channel_id}", level="warning")
         else:
@@ -839,7 +879,8 @@ class TelegramDistributor(BaseDistributor):
                 filtered_edit_tasks.append(
                     self._translate_and_edit(
                         r["msg_id"], r["header_no_text"], r["footer"],
-                        message, translated_dict, r["channel_id"], r["link_preview_options"]
+                        message, translated_dict, r["channel_id"], r["link_preview_options"],
+                        r.get("initial_text"), r.get("link_preview_options")
                     )
                 )
             elif isinstance(r, Exception):
@@ -920,26 +961,7 @@ class TelegramDistributor(BaseDistributor):
                 logger.warning(f"📱 TG_UPDATE 找不到 _msg_history: {internal_id[:20] if internal_id else 'None'}")
                 return
 
-            translate_task = self._pre_translate(message)
-            translate_result = await translate_task if translate_task else None
-
-            if not translate_result or isinstance(translate_result, Exception):
-                _diag_log(message, "TG_UPDATE 跳过: 翻译/分析结果为空或异常", level="warning")
-                logger.warning("📱 TG_UPDATE 翻译/分析结果为空或异常，跳过编辑与赛道过滤推送")
-                return
-
-            # 过滤频道不依赖 TG_FAST 的普通频道发送结果。先补发过滤频道，
-            # 避免普通频道发送慢、失败或 history 竞态拖住 A股 TG。
-            await self._send_filtered_track_channels(
-                message,
-                handle,
-                action,
-                h_lower,
-                filtered_channels,
-                _handle_filter_map,
-                translate_result,
-                time_log_str,
-            )
+            translate_future = asyncio.create_task(self._pre_translate(message))
 
             if history_future is not None:
                 try:
@@ -953,17 +975,59 @@ class TelegramDistributor(BaseDistributor):
                 if not filtered_channels:
                     _diag_log(message, "TG_UPDATE 跳过编辑: push_contexts 为空", level="warning")
                     logger.warning("📱 TG_UPDATE push_contexts 为空，跳过编辑")
-                return
+                    translate_future.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await translate_future
+                    return
 
             # 使用 cp=1 完整数据重新计算预览链接（TG_FAST cp=0 可能缺少 reference）
             updated_lpo = self._compute_link_preview_options(message, handle, action)
+            updated_footer = self._build_footer(message, handle, action)
+            updated_base_text = f"{self._format_message(message)}\n\n{updated_footer}"[:4096]
+
+            refresh_tasks = []
+            for r in push_contexts:
+                refresh_tasks.append(
+                    self._translate_and_edit(
+                        r["msg_id"], r["header_no_text"], updated_footer,
+                        message, {}, r["channel_id"], updated_lpo,
+                        r.get("initial_text"), r.get("link_preview_options")
+                    )
+                )
+            if refresh_tasks:
+                await asyncio.gather(*refresh_tasks, return_exceptions=True)
+
+            try:
+                translate_result = await translate_future
+            except Exception as e:
+                _diag_log(message, f"TG_UPDATE 翻译/分析异常，已刷新完整版: {e}", level="warning")
+                logger.warning(f"📱 TG_UPDATE 翻译/分析异常，已刷新完整版: {e}")
+                return
+            if not isinstance(translate_result, dict) or not translate_result:
+                _diag_log(message, "TG_UPDATE 翻译/分析结果为空，已刷新完整版")
+                return
+
+            translated_dict = translate_result
+
+            # 过滤频道不依赖 TG_FAST 的普通频道发送结果。拿到 AI category 后按需补发。
+            await self._send_filtered_track_channels(
+                message,
+                handle,
+                action,
+                h_lower,
+                filtered_channels,
+                _handle_filter_map,
+                translated_dict,
+                time_log_str,
+            )
 
             edit_tasks = []
             for r in push_contexts:
                 edit_tasks.append(
                     self._translate_and_edit(
-                        r["msg_id"], r["header_no_text"], r["footer"],
-                        message, translate_result, r["channel_id"], updated_lpo
+                        r["msg_id"], r["header_no_text"], updated_footer,
+                        message, translated_dict, r["channel_id"], updated_lpo,
+                        updated_base_text, updated_lpo
                     )
                 )
             if edit_tasks:
@@ -1055,7 +1119,8 @@ class TelegramDistributor(BaseDistributor):
             edit_tasks.append(
                 self._translate_and_edit(
                     r["msg_id"], r["header_no_text"], r["footer"],
-                    message, translated_dict, r["channel_id"], r["link_preview_options"]
+                    message, translated_dict, r["channel_id"], r["link_preview_options"],
+                    r.get("initial_text"), r.get("link_preview_options")
                 )
             )
 
