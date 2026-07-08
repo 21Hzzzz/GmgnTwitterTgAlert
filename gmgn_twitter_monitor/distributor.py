@@ -180,6 +180,11 @@ class TelegramDistributor(BaseDistributor):
     支持按 author.handle 白名单过滤；内置 429 Rate-Limit 自动退避重试。
     """
 
+    _TG_CHAT_MIN_INTERVAL = 1.1
+    _TG_GLOBAL_MIN_INTERVAL = 0.05
+    _TG_RATE_LIMIT_PADDING = 0.25
+    _TG_MAX_ATTEMPTS = 3
+
     def __init__(self, bot_token: str, default_channel_id: str, enable_default: bool = False, channel_map: dict[str, str] | None = None, filter_handles: list[str] | None = None, storage=None):
         self.bot_token = bot_token
         self.default_channel_id = default_channel_id
@@ -192,6 +197,10 @@ class TelegramDistributor(BaseDistributor):
         # Future 用于解决 TG_FAST 与 TG_UPDATE 的竞态条件
         self._msg_history: dict[str, asyncio.Future] = {}
         self._filtered_sent_keys: dict[tuple[str, str], None] = {}
+        self._tg_chat_locks: dict[str, asyncio.Lock] = {}
+        self._tg_chat_next_at: dict[str, float] = {}
+        self._tg_global_lock = asyncio.Lock()
+        self._tg_global_next_at = 0.0
 
     async def start(self):
         if not self.bot_token or (not self.default_channel_id and not self.channel_map):
@@ -466,37 +475,96 @@ class TelegramDistributor(BaseDistributor):
 
         return "\n".join(lines)
 
-    async def _send_api(self, endpoint: str, payload: dict) -> dict | None:
-        """统一调用 TG API，内置 429 自动退避。返回响应 dict 或 None。"""
+    def _tg_chat_key(self, payload: dict) -> str:
+        chat_id = payload.get("chat_id")
+        return str(chat_id) if chat_id is not None else "__global__"
+
+    def _tg_chat_lock(self, chat_key: str) -> asyncio.Lock:
+        lock = self._tg_chat_locks.get(chat_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._tg_chat_locks[chat_key] = lock
+        return lock
+
+    async def _wait_tg_chat_slot(self, chat_key: str) -> None:
+        wait_seconds = self._tg_chat_next_at.get(chat_key, 0.0) - time.monotonic()
+        if wait_seconds > 0:
+            await asyncio.sleep(wait_seconds)
+
+    async def _wait_tg_global_slot(self) -> None:
+        async with self._tg_global_lock:
+            wait_seconds = self._tg_global_next_at - time.monotonic()
+            if wait_seconds > 0:
+                await asyncio.sleep(wait_seconds)
+            self._tg_global_next_at = time.monotonic() + self._TG_GLOBAL_MIN_INTERVAL
+
+    def _mark_tg_chat_interval(self, chat_key: str) -> None:
+        next_at = time.monotonic() + self._TG_CHAT_MIN_INTERVAL
+        self._tg_chat_next_at[chat_key] = max(self._tg_chat_next_at.get(chat_key, 0.0), next_at)
+
+    def _mark_tg_chat_cooldown(self, chat_key: str, retry_after: float) -> None:
+        next_at = time.monotonic() + retry_after + self._TG_RATE_LIMIT_PADDING
+        self._tg_chat_next_at[chat_key] = max(self._tg_chat_next_at.get(chat_key, 0.0), next_at)
+
+    @staticmethod
+    def _parse_retry_after(data: dict) -> float:
         try:
-            async with self._session.post(
-                f"{self.api_base}/{endpoint}", json=payload
-            ) as resp:
-                if resp.status == 200:
-                    return await resp.json()
-                if resp.status == 429:
-                    data = await resp.json()
-                    retry_after = data.get("parameters", {}).get("retry_after", 5)
-                    logger.warning(f"📱 TG 被限流，{retry_after}s 后重试")
-                    await asyncio.sleep(retry_after)
-                    async with self._session.post(
-                        f"{self.api_base}/{endpoint}", json=payload
-                    ) as retry_resp:
-                        if retry_resp.status == 200:
-                            return await retry_resp.json()
-                        body = await retry_resp.text()
-                        logger.error(f"📱 TG 重试仍失败 [{retry_resp.status}]: {body[:200]}")
+            return max(float(data.get("parameters", {}).get("retry_after", 5)), 1.0)
+        except (TypeError, ValueError):
+            return 5.0
+
+    async def _send_api_once(self, endpoint: str, payload: dict, chat_key: str) -> tuple[int, dict | str | None]:
+        await self._wait_tg_chat_slot(chat_key)
+        await self._wait_tg_global_slot()
+        async with self._session.post(f"{self.api_base}/{endpoint}", json=payload) as resp:
+            if resp.status == 200:
+                self._mark_tg_chat_interval(chat_key)
+                return resp.status, await resp.json()
+            if resp.status == 429:
+                data = await resp.json()
+                retry_after = self._parse_retry_after(data)
+                self._mark_tg_chat_cooldown(chat_key, retry_after)
+                return resp.status, data
+            self._mark_tg_chat_interval(chat_key)
+            return resp.status, await resp.text()
+
+    async def _send_api(self, endpoint: str, payload: dict) -> dict | None:
+        """统一调用 TG API，按频道串行限速并内置 429 自动退避。返回响应 dict 或 None。"""
+        if not self._session:
+            logger.warning("📱 TG 分发器未启动，跳过 API 调用")
+            return None
+
+        chat_key = self._tg_chat_key(payload)
+        lock = self._tg_chat_lock(chat_key)
+        try:
+            async with lock:
+                for attempt in range(1, self._TG_MAX_ATTEMPTS + 1):
+                    status, data = await self._send_api_once(endpoint, payload, chat_key)
+                    if status == 200:
+                        return data if isinstance(data, dict) else None
+                    if status == 429:
+                        retry_after = self._parse_retry_after(data if isinstance(data, dict) else {})
+                        logger.warning(
+                            f"📱 TG 被限流 chat={chat_key} endpoint={endpoint}，"
+                            f"{retry_after:g}s 后排队重试 ({attempt}/{self._TG_MAX_ATTEMPTS})"
+                        )
+                        if attempt < self._TG_MAX_ATTEMPTS:
+                            continue
+                        body = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else str(data)
+                        logger.error(f"📱 TG 重试仍失败 [429]: {body[:200]}")
                         return None
-                body = await resp.text()
-                logger.error(f"📱 TG 推送失败 [{resp.status}]: {body[:200]}")
-                return None
+                    logger.error(f"📱 TG 推送失败 [{status}]: {str(data)[:200]}")
+                    return None
         except asyncio.TimeoutError:
+            self._mark_tg_chat_interval(chat_key)
             logger.error("📱 TG 推送超时 (15s)")
             return None
         except aiohttp.ClientError as e:
+            self._mark_tg_chat_interval(chat_key)
             logger.error(f"📱 TG 推送网络异常: {e}")
             return None
         except Exception as e:
+            self._mark_tg_chat_interval(chat_key)
             logger.error(f"📱 TG 推送未知异常: {e}")
             return None
 
