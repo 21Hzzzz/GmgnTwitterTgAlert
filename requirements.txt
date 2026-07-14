@@ -1,0 +1,6 @@
+xvfbwrapper
+playwright
+loguru
+aiohttp>=3.9
+python-dotenv>=1.0
+aiohttp-socks

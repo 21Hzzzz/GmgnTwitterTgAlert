@@ -1,0 +1,26 @@
+[Unit]
+Description=GMGN Telegram Monitor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=gmgn-monitor
+Group=gmgn-monitor
+WorkingDirectory=/opt/gmgn-twitter-monitor/current
+EnvironmentFile=/etc/gmgn-twitter-monitor/gmgn.env
+Environment="GMGN_ENV_FILE=/etc/gmgn-twitter-monitor/gmgn.env"
+Environment="GMGN_STATE_DIR=/var/lib/gmgn-twitter-monitor"
+Environment="HOME=/var/lib/gmgn-twitter-monitor"
+Environment="PLAYWRIGHT_BROWSERS_PATH=/opt/gmgn-twitter-monitor/browsers"
+ExecStartPre=/usr/bin/test -s /etc/gmgn-twitter-monitor/gmgn.env
+ExecStart=/opt/gmgn-twitter-monitor/current/.venv/bin/python -m gmgn_twitter_monitor
+Restart=always
+RestartSec=10
+RuntimeMaxSec=43200
+TimeoutStopSec=30
+UMask=0077
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

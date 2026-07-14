@@ -1,0 +1,16 @@
+[project]
+name = "gmgn-twitter-tg-alert"
+version = "1.0.0"
+description = "GMGN signals forwarded to Telegram groups"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "aiohttp>=3.9",
+    "aiohttp-socks",
+    "loguru",
+    "playwright",
+    "python-dotenv>=1.0",
+    "xvfbwrapper",
+]
+
+[tool.uv]
+package = false
