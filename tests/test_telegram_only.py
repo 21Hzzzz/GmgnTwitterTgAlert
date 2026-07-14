@@ -34,6 +34,19 @@ class _Message:
 
 
 class TelegramOnlyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_all_group_is_always_added_to_routed_targets(self):
+        telegram = TelegramDistributor(
+            "token",
+            "-100-all",
+            enable_default=True,
+            channel_map={"alice": ["-100-routed"]},
+        )
+        self.assertEqual(
+            telegram._target_channel_ids("alice"),
+            ["-100-all", "-100-routed"],
+        )
+        self.assertEqual(telegram._target_channel_ids("bob"), ["-100-all"])
+
     async def test_snapshot_then_complete_only_dispatches_telegram_targets(self):
         published = []
 
@@ -144,6 +157,21 @@ class ConfigurationTests(unittest.TestCase):
             self.assertFalse(hasattr(reloaded, "FEISHU_CHANNEL_MAP"))
         importlib.reload(config)
 
+    def test_all_group_does_not_restrict_global_handle_filter(self):
+        values = {
+            "TG_ENABLE_DEFAULT": "True",
+            "TG_CHANNEL_ID": "-100-all",
+            "TG_ROUTING_UNITTESTALL": "Alice",
+            "TG_ENABLE_UNITTESTALL": "True",
+            "TG_CHANNEL_ID_UNITTESTALL": "-100-routed",
+            "TG_FILTER_HANDLES": "",
+        }
+        with patch.dict(os.environ, values, clear=False):
+            reloaded = importlib.reload(config)
+            self.assertEqual(reloaded.TG_FILTER_HANDLES, [])
+            self.assertEqual(reloaded.TG_CHANNEL_MAP["alice"], ["-100-routed"])
+        importlib.reload(config)
+
     def test_runtime_hub_contains_only_telegram(self):
         hub = _build_distributor_hub()
         self.assertEqual(len(hub.distributors), 1)
@@ -153,6 +181,8 @@ class ConfigurationTests(unittest.TestCase):
         installer = (Path(__file__).parents[1] / "install.sh").read_text(encoding="utf-8")
         for action in ("reconfigure", "relogin", "uninstall", "--purge"):
             self.assertIn(action, installer)
+        self.assertIn('default_group="ALL"', installer)
+        self.assertNotIn("TG_ROUTING_ALL", installer)
         self.assertIn("User=gmgn-monitor", (Path(__file__).parents[1] / "gmgn-twitter-monitor.service").read_text(encoding="utf-8"))
 
 

@@ -101,6 +101,17 @@ class TelegramDistributor(BaseDistributor):
         handle = message.get("author", {}).get("handle", "")
         return handle.lower() in self.filter_handles
 
+    def _target_channel_ids(self, handle: str) -> list[str]:
+        """返回路由群组，并在启用时始终加入 ALL 全量群组。"""
+        target_ids = list(self.channel_map.get(handle.lower(), []))
+        if (
+            self.enable_default
+            and self.default_channel_id
+            and self.default_channel_id not in target_ids
+        ):
+            target_ids.insert(0, self.default_channel_id)
+        return target_ids
+
     @staticmethod
     def _track_matches(category: str, keywords: list[str]) -> bool:
         normalized_category = "".join((category or "").casefold().split())
@@ -804,15 +815,10 @@ class TelegramDistributor(BaseDistributor):
 
         # 核心：动态路由
         h_lower = handle.lower()
-        target_channel_ids = self.channel_map.get(h_lower, [])
-        if not target_channel_ids:
-            if not self.enable_default:
-                _diag_log(message, "TG 跳过: 无路由且默认频道未启用", level="warning")
-                return
-            target_channel_ids = [self.default_channel_id] if self.default_channel_id else []
+        target_channel_ids = self._target_channel_ids(h_lower)
 
         if not target_channel_ids:
-            _diag_log(message, "TG 跳过: 目标频道列表为空", level="warning")
+            _diag_log(message, "TG 跳过: 未命中路由且 ALL 群组未启用", level="warning")
             return
 
         # ── 按赛道过滤规则拆分频道 ──

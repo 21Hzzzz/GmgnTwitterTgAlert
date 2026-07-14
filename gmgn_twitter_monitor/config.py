@@ -84,8 +84,9 @@ TG_FILTER_HANDLES = [
     for h in os.getenv("TG_FILTER_HANDLES", "").split(",")
     if h.strip()
 ]
-# 自动将启用路由组中的博主并入全局监控白名单
-if _routing_handles:
+# 未启用 ALL 全量群时，自动将路由组 handles 并入全局监控白名单。
+# ALL 启用时必须保持空白名单，才能接收所有上游消息。
+if _routing_handles and not TG_ENABLE_DEFAULT:
     TG_FILTER_HANDLES = list(set(TG_FILTER_HANDLES) | _routing_handles)
 
 # ---------- Binance Square 配置 ----------

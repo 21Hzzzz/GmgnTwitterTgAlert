@@ -57,8 +57,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/21Hzzzz/GmgnTwitterTgAlert/m
 ```bash
 export NONINTERACTIVE=1
 export TG_BOT_TOKEN='123456789:replace-me'
-export TG_CHANNEL_ID_MAIN='-1001234567890'
-export TG_ROUTING_MAIN='cz_binance,heyibinance'
+export TG_CHANNEL_ID_ALL='-1001234567890'
 export GMGN_AUTH_URL='https://gmgn.ai/tglogin?...'
 
 # 二选一
@@ -68,7 +67,7 @@ export PROXY_SERVER='socks5://127.0.0.1:1080'
 bash <(curl -fsSL https://raw.githubusercontent.com/21Hzzzz/GmgnTwitterTgAlert/main/install.sh)
 ```
 
-可选变量：`TG_TRACK_FILTER_MAIN`、`DEEPSEEK_API_KEY`、`SUMMARY_ENABLE`、`SUMMARY_TIMES`、`SUMMARY_TIMEZONE`。
+`ALL` 群组接收所有消息，不需要配置 handles。可选变量包括 `DEEPSEEK_API_KEY`、`SUMMARY_ENABLE`、`SUMMARY_TIMES`、`SUMMARY_TIMEZONE`。
 
 ## 重新配置与授权
 
@@ -88,7 +87,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/21Hzzzz/GmgnTwitterTgAlert/m
 
 ## Telegram 路由配置
 
-生产配置位于 `/etc/gmgn-twitter-monitor/gmgn.env`。每个路由组使用相同后缀：
+生产配置位于 `/etc/gmgn-twitter-monitor/gmgn.env`。`ALL` 是不需要 handles 的全量群组：
+
+```env
+TG_ENABLE_DEFAULT=True
+TG_CHANNEL_ID=-1001234567890
+TG_CHANNEL_ID_ALL=-1001234567890
+```
+
+还可添加按 handles 分流的定向组，每个组使用相同后缀：
 
 ```env
 TG_ROUTING_BINANCE=cz_binance,heyibinance
@@ -105,7 +112,7 @@ TG_TRACK_FILTER_MUSK=
 - handle 不带 `@`，推荐小写。
 - 同一 handle 可以出现在多个组中。
 - `TG_TRACK_FILTER_*` 依赖 AI 分析结果；使用时还要把相应 handle 加入 `AI_ANALYZE_HANDLES`。
-- `TG_ENABLE_DEFAULT=True` 与 `TG_CHANNEL_ID` 可设置未命中任何路由组时的兜底群组，默认关闭。
+- `ALL` 群组会始终收到所有消息；命中定向路由时，消息会同时发送到 `ALL` 和对应定向群组。
 
 手工编辑后执行：
 

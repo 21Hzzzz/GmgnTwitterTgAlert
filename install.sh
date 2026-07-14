@@ -218,22 +218,19 @@ validate_telegram() {
 
 write_configuration() {
   local token deepseek summary_enable summary_times summary_tz
-  local group chat_id handles track add_more route_lines="" summary_groups=""
+  local group chat_id handles track add_more route_lines="" summary_groups="" all_chat_id=""
   CHAT_IDS=()
   GROUP_NAMES=()
 
   if [[ "$NONINTERACTIVE" == "1" ]]; then
     token="${TG_BOT_TOKEN:-}"
-    chat_id="${TG_CHANNEL_ID_MAIN:-}"
-    handles="${TG_ROUTING_MAIN:-}"
-    [[ -n "$token" && -n "$chat_id" && -n "$handles" ]] \
-      || die "无交互安装需要 TG_BOT_TOKEN、TG_CHANNEL_ID_MAIN、TG_ROUTING_MAIN。"
-    group="MAIN"
-    track="${TG_TRACK_FILTER_MAIN:-}"
+    chat_id="${TG_CHANNEL_ID_ALL:-}"
+    [[ -n "$token" && -n "$chat_id" ]] \
+      || die "无交互安装需要 TG_BOT_TOKEN 和 TG_CHANNEL_ID_ALL。"
+    group="ALL"
+    all_chat_id="$chat_id"
     CHAT_IDS+=("$chat_id")
     GROUP_NAMES+=("$group")
-    printf -v route_lines 'TG_ROUTING_%s=%s\nTG_ENABLE_%s=True\nTG_CHANNEL_ID_%s=%s\nTG_TRACK_FILTER_%s=%s\n' \
-      "$group" "$handles" "$group" "$group" "$chat_id" "$group" "$track"
     deepseek="${DEEPSEEK_API_KEY:-}"
     summary_enable="${SUMMARY_ENABLE:-False}"
     summary_times="${SUMMARY_TIMES:-07:30,20:00}"
@@ -241,7 +238,7 @@ write_configuration() {
   else
     token="$(prompt 'Telegram Bot Token')"
     while true; do
-      local default_group="MAIN"
+      local default_group="ALL"
       if [[ "${#GROUP_NAMES[@]}" -gt 0 ]]; then
         default_group="GROUP$(( ${#CHAT_IDS[@]} + 1 ))"
       fi
@@ -250,13 +247,18 @@ write_configuration() {
       [[ "$group" =~ ^[A-Z0-9_]+$ ]] || die "路由组名称格式无效。"
       [[ " ${GROUP_NAMES[*]} " != *" $group "* ]] || die "路由组名称重复: $group"
       chat_id="$(single_line "$(prompt 'Telegram 群组 ID（通常以 -100 开头）')")"
-      handles="$(single_line "$(prompt '监控 handles，逗号分隔（不含 @）')")"
-      track="$(single_line "$(prompt '赛道过滤关键词，逗号分隔，可留空')")"
-      [[ -n "$chat_id" && -n "$handles" ]] || die "群组 ID 和 handles 不能为空。"
+      [[ -n "$chat_id" ]] || die "群组 ID 不能为空。"
       CHAT_IDS+=("$chat_id")
       GROUP_NAMES+=("$group")
-      printf -v route_lines '%sTG_ROUTING_%s=%s\nTG_ENABLE_%s=True\nTG_CHANNEL_ID_%s=%s\nTG_TRACK_FILTER_%s=%s\n' \
-        "$route_lines" "$group" "$handles" "$group" "$group" "$chat_id" "$group" "$track"
+      if [[ "$group" == "ALL" ]]; then
+        all_chat_id="$chat_id"
+      else
+        handles="$(single_line "$(prompt '监控 handles，逗号分隔（不含 @）')")"
+        track="$(single_line "$(prompt '赛道过滤关键词，逗号分隔，可留空')")"
+        [[ -n "$handles" ]] || die "自定义路由组的 handles 不能为空。"
+        printf -v route_lines '%sTG_ROUTING_%s=%s\nTG_ENABLE_%s=True\nTG_CHANNEL_ID_%s=%s\nTG_TRACK_FILTER_%s=%s\n' \
+          "$route_lines" "$group" "$handles" "$group" "$group" "$chat_id" "$group" "$track"
+      fi
       read -r -p "继续添加路由组？ [y/N]: " add_more </dev/tty
       [[ "$add_more" =~ ^[Yy]$ ]] || break
     done
@@ -281,7 +283,11 @@ write_configuration() {
   tmp="$(mktemp "${ENV_DIR}/gmgn.env.XXXXXX")"
   {
     printf 'TG_BOT_TOKEN=%s\n' "$token"
-    printf 'TG_ENABLE_DEFAULT=False\nTG_CHANNEL_ID=\n'
+    if [[ -n "$all_chat_id" ]]; then
+      printf 'TG_ENABLE_DEFAULT=True\nTG_CHANNEL_ID=%s\nTG_CHANNEL_ID_ALL=%s\n' "$all_chat_id" "$all_chat_id"
+    else
+      printf 'TG_ENABLE_DEFAULT=False\nTG_CHANNEL_ID=\n'
+    fi
     printf '%s' "$route_lines"
     printf 'TG_FILTER_HANDLES=\n'
     printf 'BINANCE_SQUARE_HANDLES=cz,heyi\n'
