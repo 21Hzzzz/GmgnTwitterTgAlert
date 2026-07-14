@@ -41,7 +41,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/21Hzzzz/GmgnTwitterTgAlert/m
 首次安装会依次：
 
 1. 检查系统版本与 CPU 架构。
-2. 检测已有 SOCKS5 代理；不可用时询问安装 Cloudflare WARP 或使用自有代理。
+2. 选择直连、已有 SOCKS5 代理或自动安装 Cloudflare WARP。
 3. 收集 Telegram Bot Token 和一个或多个路由组。
 4. 使用 Telegram `getMe`/`getChat` 验证 Bot 和群组，不发送测试消息。
 5. 安装 uv、Python 3.12、锁定依赖、Playwright Chromium 和 Linux 依赖。
@@ -60,9 +60,10 @@ export TG_BOT_TOKEN='123456789:replace-me'
 export TG_CHANNEL_ID_ALL='-1001234567890'
 export GMGN_AUTH_URL='https://gmgn.ai/tglogin?...'
 
-# 二选一
+# 三选一
 export PROXY_SERVER='socks5://127.0.0.1:1080'
 # export INSTALL_WARP=1
+# export PROXY_SERVER=direct
 
 bash <(curl -fsSL https://raw.githubusercontent.com/21Hzzzz/GmgnTwitterTgAlert/main/install.sh)
 ```
@@ -178,6 +179,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/21Hzzzz/GmgnTwitterTgAlert/m
 
 - `Bot 无法访问群组`：确认 Bot 已加入群组，群组 ID 正确，并拥有发消息权限。
 - `代理无法连通`：运行 `curl --proxy socks5://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace`；WARP 用户再检查 `warp-cli status`。
+- `直连模式`：配置文件中使用 `PROXY_SERVER=direct`；浏览器和 DeepSeek 请求均不会使用代理。
 - `You are not logged in to GMGN`：执行 `relogin` 并输入新的单次授权链接；授权命令会进入监控页验证实际登录状态，不再仅凭授权页成功加载作判断。
 - `无法定位 Mine/我的`：登录态可能失效，执行 `relogin`。
 - Chromium 启动失败：查看 `journalctl -u gmgn-twitter-monitor -n 100 --no-pager`。

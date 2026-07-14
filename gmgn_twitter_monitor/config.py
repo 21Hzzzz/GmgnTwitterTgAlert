@@ -35,7 +35,12 @@ GMGN_STORAGE_STATE_PATH = os.getenv(
 )
 SUMMARY_DB_PATH = os.getenv("SUMMARY_DB_PATH", str(STATE_DIR / "twitter_monitor.db"))
 MONITOR_URL = os.getenv("MONITOR_URL", "https://gmgn.ai/follow?target=xTracker&chain=bsc")
-PROXY_SERVER = os.getenv("PROXY_SERVER", "socks5://127.0.0.1:40000")
+_PROXY_SERVER_RAW = os.getenv("PROXY_SERVER", "socks5://127.0.0.1:40000").strip()
+PROXY_SERVER = (
+    ""
+    if _PROXY_SERVER_RAW.lower() in {"", "direct", "none", "off"}
+    else _PROXY_SERVER_RAW
+)
 WATCHDOG_TIMEOUT = _int_env("WATCHDOG_TIMEOUT", 120)
 WATCHDOG_POLL_INTERVAL = _int_env("WATCHDOG_POLL_INTERVAL", 5)
 XVFB_WIDTH = _int_env("XVFB_WIDTH", 1920)

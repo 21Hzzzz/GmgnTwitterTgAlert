@@ -327,6 +327,23 @@ class TelegramOnlyTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_direct_proxy_mode_disables_runtime_proxy(self):
+        with patch.dict(os.environ, {"PROXY_SERVER": "direct"}, clear=False):
+            reloaded = importlib.reload(config)
+            self.assertEqual(reloaded.PROXY_SERVER, "")
+            self.assertNotIn("proxy", BrowserManager._launch_options())
+        importlib.reload(config)
+
+    def test_socks_proxy_mode_is_passed_to_browser(self):
+        proxy = "socks5://127.0.0.1:1080"
+        with patch.dict(os.environ, {"PROXY_SERVER": proxy}, clear=False):
+            reloaded = importlib.reload(config)
+            self.assertEqual(reloaded.PROXY_SERVER, proxy)
+            self.assertEqual(
+                BrowserManager._launch_options()["proxy"], {"server": proxy}
+            )
+        importlib.reload(config)
+
     def test_dynamic_routes_only_build_telegram_maps(self):
         values = {
             "TG_ROUTING_UNITTEST": "Alice,Bob",
@@ -376,6 +393,8 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn('LOGIN_REQUIRED_MARKER="${STATE_DIR}/.login-required"', installer)
         self.assertIn('SESSION_STORAGE_FILE="${STATE_DIR}/gmgn_session_storage.json"', installer)
         self.assertIn('STORAGE_STATE_FILE="${STATE_DIR}/gmgn_storage_state.json"', installer)
+        self.assertIn('PROXY_VALUE="direct"', installer)
+        self.assertIn("不使用任何代理（直连）", installer)
         self.assertIn('READY_SCREENSHOT="${STATE_DIR}/monitor_running.png"', installer)
         self.assertIn("User=gmgn-monitor", (Path(__file__).parents[1] / "gmgn-twitter-monitor.service").read_text(encoding="utf-8"))
 

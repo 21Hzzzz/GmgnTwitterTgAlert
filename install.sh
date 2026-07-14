@@ -148,6 +148,11 @@ proxy_works() {
   curl -fsS --max-time 20 --proxy "$proxy" https://www.cloudflare.com/cdn-cgi/trace >/dev/null
 }
 
+use_direct_connection() {
+  PROXY_VALUE="direct"
+  ok "已选择直连模式，不使用任何代理。"
+}
+
 install_warp() {
   log "从 Cloudflare 官方仓库安装 WARP..."
   curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
@@ -169,30 +174,63 @@ install_warp() {
 }
 
 configure_proxy() {
-  local candidate="${PROXY_SERVER:-}"
+  local candidate="${PROXY_SERVER:-}" candidate_from_env=0
+  if [[ -n "$candidate" ]]; then
+    candidate_from_env=1
+  fi
   if [[ -z "$candidate" ]]; then
     candidate="$(read_env_value PROXY_SERVER 2>/dev/null || true)"
   fi
+  case "${candidate,,}" in
+    direct|none|off)
+      if [[ "$ACTION" != "reconfigure" || "$candidate_from_env" -eq 1 || "$NONINTERACTIVE" == "1" ]]; then
+        use_direct_connection
+        return
+      fi
+      ;;
+  esac
   if [[ -n "$candidate" ]] && proxy_works "$candidate"; then
-    ok "代理可用: $candidate"
-    PROXY_VALUE="$candidate"
-    return
+    if [[ "$ACTION" != "reconfigure" || "$candidate_from_env" -eq 1 || "$NONINTERACTIVE" == "1" ]]; then
+      ok "代理可用: $candidate"
+      PROXY_VALUE="$candidate"
+      return
+    fi
   fi
 
   if [[ "$NONINTERACTIVE" == "1" ]]; then
     [[ "${INSTALL_WARP:-0}" == "1" ]] \
-      || die "无交互安装必须提供可用 PROXY_SERVER，或设置 INSTALL_WARP=1。"
+      || die "无交互安装必须提供可用 PROXY_SERVER、设置 PROXY_SERVER=direct，或设置 INSTALL_WARP=1。"
     install_warp
     return
   fi
 
+  if [[ -n "$candidate" ]] && proxy_works "$candidate"; then
+    ok "当前代理可用: $candidate"
+    printf '  1. 保持当前 SOCKS5 代理\n  2. 不使用任何代理（直连）\n  3. 自动安装并配置 Cloudflare WARP\n  4. 填写其他 SOCKS5 代理\n  5. 退出\n' >/dev/tty
+    local choice
+    read -r -p "请选择 [1-5]: " choice </dev/tty
+    case "$choice" in
+      1) PROXY_VALUE="$candidate" ;;
+      2) use_direct_connection ;;
+      3) install_warp ;;
+      4)
+        candidate="$(prompt 'SOCKS5 地址（例如 socks5://127.0.0.1:1080）')"
+        proxy_works "$candidate" || die "代理无法连通。"
+        PROXY_VALUE="$candidate"
+        ;;
+      *) die "已取消安装。" ;;
+    esac
+    return
+  fi
+
   warn "未检测到可用的 SOCKS5 代理。"
-  printf '  1. 自动安装并配置 Cloudflare WARP\n  2. 使用已有 SOCKS5 代理\n  3. 退出\n' >/dev/tty
+  printf '  1. 不使用任何代理（直连）\n  2. 自动安装并配置 Cloudflare WARP\n  3. 使用已有 SOCKS5 代理\n  4. 退出\n' >/dev/tty
   local choice
-  read -r -p "请选择 [1-3]: " choice </dev/tty
+  read -r -p "请选择 [1-4]: " choice </dev/tty
   case "$choice" in
-    1) install_warp ;;
-    2)
+    1) use_direct_connection ;;
+    2) install_warp ;;
+    3)
       candidate="$(prompt 'SOCKS5 地址（例如 socks5://127.0.0.1:1080）')"
       proxy_works "$candidate" || die "代理无法连通。"
       PROXY_VALUE="$candidate"

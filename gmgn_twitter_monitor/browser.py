@@ -13,18 +13,30 @@ class BrowserManager:
         self.context: BrowserContext | None = None
         self.page: Page | None = None
 
-    async def launch(self, playwright: Playwright) -> Page:
-        logger.info(f"正在启动浏览器，使用持久化数据目录: {config.USER_DATA_DIR}")
-        self.context = await playwright.chromium.launch_persistent_context(
-            user_data_dir=config.USER_DATA_DIR,
-            headless=False,
-            proxy={"server": config.PROXY_SERVER},
-            args=[
+    @staticmethod
+    def _launch_options() -> dict:
+        options = {
+            "user_data_dir": config.USER_DATA_DIR,
+            "headless": False,
+            "args": [
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
                 "--window-size=1920,1080",
                 "--start-maximized",
             ],
+        }
+        if config.PROXY_SERVER:
+            options["proxy"] = {"server": config.PROXY_SERVER}
+        return options
+
+    async def launch(self, playwright: Playwright) -> Page:
+        logger.info(f"正在启动浏览器，使用持久化数据目录: {config.USER_DATA_DIR}")
+        if config.PROXY_SERVER:
+            logger.info(f"浏览器网络模式: SOCKS5 代理 {config.PROXY_SERVER}")
+        else:
+            logger.info("浏览器网络模式: 直连（不使用代理）")
+        self.context = await playwright.chromium.launch_persistent_context(
+            **self._launch_options()
         )
         await self._restore_storage_state()
         await self._restore_session_storage()
