@@ -328,7 +328,7 @@ install_release() {
   log "安装 Chromium 与 Linux 运行依赖..."
   PLAYWRIGHT_BROWSERS_PATH="$BROWSER_DIR" \
     "$release_path/.venv/bin/playwright" install --with-deps chromium
-  GMGN_ENV_FILE="$ENV_FILE" GMGN_STATE_DIR="$STATE_DIR" \
+  PYTHONPATH="$release_path" GMGN_ENV_FILE="$ENV_FILE" GMGN_STATE_DIR="$STATE_DIR" \
     "$release_path/.venv/bin/python" -c \
     "import gmgn_twitter_monitor; import gmgn_twitter_monitor.app; import gmgn_twitter_monitor.distributor; print('imports ok')"
   chown -R root:root "$release_path" "$BROWSER_DIR" "$PYTHON_DIR"
@@ -361,6 +361,7 @@ run_login() {
   systemctl stop "$SERVICE_NAME" 2>/dev/null || true
   runuser -u "$SERVICE_USER" -- env \
     HOME="$STATE_DIR" \
+    PYTHONPATH="$CURRENT_LINK" \
     GMGN_ENV_FILE="$login_env" \
     GMGN_STATE_DIR="$STATE_DIR" \
     PLAYWRIGHT_BROWSERS_PATH="$BROWSER_DIR" \

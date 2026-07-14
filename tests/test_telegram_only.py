@@ -183,6 +183,8 @@ class ConfigurationTests(unittest.TestCase):
             self.assertIn(action, installer)
         self.assertIn('default_group="ALL"', installer)
         self.assertNotIn("TG_ROUTING_ALL", installer)
+        self.assertIn('PYTHONPATH="$release_path"', installer)
+        self.assertIn('PYTHONPATH="$CURRENT_LINK"', installer)
         self.assertIn("User=gmgn-monitor", (Path(__file__).parents[1] / "gmgn-twitter-monitor.service").read_text(encoding="utf-8"))
 
 
