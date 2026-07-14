@@ -121,23 +121,52 @@ class BrowserManager:
             pass
 
     async def switch_to_mine_tab(self):
+        selectors = (
+            "xpath=//*[@role='tab' and (normalize-space()='我的' or normalize-space()='Mine' "
+            "or normalize-space()='关注' or normalize-space()='Following')]",
+            "xpath=//*[normalize-space()='我的' or normalize-space()='Mine' "
+            "or normalize-space()='关注' or normalize-space()='Following']",
+        )
+        my_tab = None
+        for selector in selectors:
+            candidate = self.page.locator(selector).first
+            if await candidate.is_visible(timeout=2000):
+                my_tab = candidate
+                break
+
+        if my_tab is None:
+            raise RuntimeError(
+                "无法定位 Mine/Following 标签页，可能是 GMGN UI 已更改或登录态失效。"
+            )
+
+        logger.info("找到【Mine/Following】标签，正在切换...")
         try:
-            my_tab = self.page.locator("xpath=//*[text()='我的' or text()='Mine' or text()='关注' or text()='Following']").first
-            if await my_tab.is_visible(timeout=2000):
-                logger.info("找到【我的/Mine/Following】标签，正在切换...")
-                await my_tab.click()
-                await self.page.wait_for_timeout(2000)
-            else:
-                logger.warning("未能通过精确文字找到【我的/Mine/Following】标签元素，尝试通过相关类名寻找...")
-                backup_tab = self.page.locator("span:has-text('我的'), span:has-text('Mine'), span:has-text('关注'), span:has-text('Following')").first
-                if await backup_tab.is_visible():
-                    await backup_tab.click()
-                    await self.page.wait_for_timeout(2000)
-                else:
-                    raise RuntimeError("无法定位到目标标签页！可能是 UI 更改或登录状态（Cookie）已失效。")
-        except Exception as e:
-            logger.error(f"切换标签页时出错: {e}")
-            raise
+            # GMGN's tab handler can make Locator.click() wait for a navigation
+            # even after the click has already taken effect. A DOM click avoids
+            # that navigation auto-wait and still invokes the React click handler.
+            await my_tab.evaluate("element => element.click()")
+            await self.page.wait_for_timeout(1500)
+        except Exception as error:
+            logger.warning(f"DOM 点击 Mine/Following 失败，尝试强制点击: {error}")
+            try:
+                await my_tab.click(force=True, timeout=5000, no_wait_after=True)
+                await self.page.wait_for_timeout(1500)
+            except Exception as fallback_error:
+                logger.warning(
+                    "Mine/Following 标签切换未完成，但不会中断已经建立的上游监听: "
+                    f"{fallback_error}"
+                )
+                return False
+
+        selected = await my_tab.get_attribute("aria-selected")
+        if selected == "true":
+            logger.success("已切换到 Mine/Following 标签页。")
+            return True
+
+        logger.warning(
+            "Mine/Following 标签未返回选中状态，继续保持上游 WebSocket 监听。"
+        )
+        return False
 
     async def save_screenshot(self):
         await self.page.screenshot(path=config.SCREENSHOT_PATH)

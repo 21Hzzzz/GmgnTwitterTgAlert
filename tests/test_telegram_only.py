@@ -56,6 +56,43 @@ class TelegramOnlyTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(all(kwargs["timeout"] == 60000 for _, kwargs in browser.page.goto_calls))
 
+    async def test_mine_tab_uses_dom_click_without_navigation_wait(self):
+        class FakeLocator:
+            def __init__(self):
+                self.first = self
+                self.dom_clicks = 0
+                self.checked_attribute = None
+
+            async def is_visible(self, timeout=None):
+                return True
+
+            async def evaluate(self, _expression):
+                self.dom_clicks += 1
+
+            async def get_attribute(self, name):
+                self.checked_attribute = name
+                return "true"
+
+            async def click(self, **_kwargs):
+                raise AssertionError("regular Playwright click must not be used")
+
+        class FakePage:
+            def __init__(self):
+                self.tab = FakeLocator()
+
+            def locator(self, _selector):
+                return self.tab
+
+            async def wait_for_timeout(self, _milliseconds):
+                return None
+
+        browser = BrowserManager()
+        browser.page = FakePage()
+
+        self.assertTrue(await browser.switch_to_mine_tab())
+        self.assertEqual(browser.page.tab.dom_clicks, 1)
+        self.assertEqual(browser.page.tab.checked_attribute, "aria-selected")
+
     async def test_all_group_is_always_added_to_routed_targets(self):
         telegram = TelegramDistributor(
             "token",
