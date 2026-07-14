@@ -708,6 +708,7 @@ async def main():
 
             await browser.goto_monitor_page()
             await browser.handle_popups()
+            await browser.assert_logged_in(settle_ms=1000)
             await browser.switch_to_mine_tab()
             await browser.save_screenshot()
 

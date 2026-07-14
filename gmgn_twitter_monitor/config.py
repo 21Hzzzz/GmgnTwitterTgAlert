@@ -21,6 +21,12 @@ def _int_env(name: str, default: int) -> int:
 LOG_FILE = os.getenv("LOG_FILE", str(STATE_DIR / "twitter_monitor.log"))
 USER_DATA_DIR = os.getenv("USER_DATA_DIR", str(STATE_DIR / "browser_data"))
 SCREENSHOT_PATH = os.getenv("SCREENSHOT_PATH", str(STATE_DIR / "monitor_running.png"))
+LOGIN_FAILURE_SCREENSHOT = os.getenv(
+    "LOGIN_FAILURE_SCREENSHOT", str(STATE_DIR / "login_failed.png")
+)
+LOGIN_REQUIRED_MARKER = os.getenv(
+    "LOGIN_REQUIRED_MARKER", str(STATE_DIR / ".login-required")
+)
 SUMMARY_DB_PATH = os.getenv("SUMMARY_DB_PATH", str(STATE_DIR / "twitter_monitor.db"))
 MONITOR_URL = os.getenv("MONITOR_URL", "https://gmgn.ai/follow?target=xTracker&chain=bsc")
 PROXY_SERVER = os.getenv("PROXY_SERVER", "socks5://127.0.0.1:40000")

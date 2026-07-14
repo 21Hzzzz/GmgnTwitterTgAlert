@@ -13,6 +13,7 @@ ENV_DIR="/etc/${APP_NAME}"
 ENV_FILE="${ENV_DIR}/gmgn.env"
 STATE_DIR="/var/lib/${APP_NAME}"
 LOGIN_MARKER="${STATE_DIR}/.login-complete"
+LOGIN_REQUIRED_MARKER="${STATE_DIR}/.login-required"
 READY_SCREENSHOT="${STATE_DIR}/monitor_running.png"
 BACKUP_ROOT="/root/${APP_NAME}-backups"
 REPO_URL="${GMGN_REPO_URL:-https://github.com/21Hzzzz/GmgnTwitterTgAlert.git}"
@@ -361,6 +362,7 @@ run_login() {
   chown root:"$SERVICE_USER" "$login_env"
   chmod 0640 "$login_env"
   systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+  local login_status=0
   runuser -u "$SERVICE_USER" -- env \
     HOME="$STATE_DIR" \
     PYTHONPATH="$CURRENT_LINK" \
@@ -368,8 +370,9 @@ run_login() {
     GMGN_STATE_DIR="$STATE_DIR" \
     PLAYWRIGHT_BROWSERS_PATH="$BROWSER_DIR" \
     "$CURRENT_LINK/.venv/bin/python" -m gmgn_twitter_monitor --login \
-    || return 1
+    || login_status=$?
   rm -f "$login_env"
+  [[ "$login_status" -eq 0 ]] || return "$login_status"
   if ! find "${STATE_DIR}/browser_data" -mindepth 1 -print -quit 2>/dev/null | grep -q .; then
     warn "授权流程结束，但未检测到浏览器登录态。"
     return 1
@@ -384,6 +387,10 @@ health_check() {
   local i stable=0
   for i in {1..45}; do
     sleep 2
+    if [[ -f "$LOGIN_REQUIRED_MARKER" ]]; then
+      warn "检测到 GMGN 登录态无效。"
+      return 1
+    fi
     if systemctl is-active --quiet "$SERVICE_NAME" && [[ -s "$READY_SCREENSHOT" ]]; then
       stable=$((stable + 1))
       if [[ "$stable" -ge 3 ]]; then
@@ -399,7 +406,7 @@ health_check() {
 }
 
 restart_service() {
-  rm -f -- "$READY_SCREENSHOT"
+  rm -f -- "$READY_SCREENSHOT" "$LOGIN_REQUIRED_MARKER"
   systemctl restart "$SERVICE_NAME"
 }
 
@@ -430,6 +437,17 @@ do_install() {
 
   restart_service
   if ! health_check; then
+    if [[ -f "$LOGIN_REQUIRED_MARKER" ]]; then
+      if [[ "$NONINTERACTIVE" == "1" ]]; then
+        die "GMGN 登录态无效；新版本已保留，请提供 GMGN_AUTH_URL 后执行 relogin。"
+      fi
+      warn "现有 GMGN 登录态无效，需要使用新的单次授权链接。"
+      run_login || die "GMGN 重新授权失败；新版本已保留，可再次执行 relogin。"
+      restart_service
+      health_check || die "GMGN 重新授权后服务仍未通过健康检查。"
+      ok "安装/升级完成。查看日志: journalctl -u $SERVICE_NAME -f"
+      return
+    fi
     if [[ -n "$previous" && -d "$previous" ]]; then
       warn "新版本健康检查失败，正在恢复旧版本。"
       ln -sfn "$previous" "$CURRENT_LINK"
@@ -452,7 +470,15 @@ do_reconfigure() {
 }
 
 do_relogin() {
+  load_os
+  ensure_user_and_dirs
+  ensure_uv
   [[ -x "$CURRENT_LINK/.venv/bin/python" ]] || die "尚未安装。"
+  local previous
+  previous="$(readlink -f "$CURRENT_LINK")"
+  install_release
+  ln -sfn "$NEW_RELEASE" "$CURRENT_LINK"
+  install_service
   local backup="${STATE_DIR}/browser_data.before-relogin"
   local marker_backup="${LOGIN_MARKER}.before-relogin"
   rm -rf -- "$backup"
@@ -472,8 +498,10 @@ do_relogin() {
     rm -rf -- "${STATE_DIR}/browser_data"
     [[ ! -d "$backup" ]] || mv "$backup" "${STATE_DIR}/browser_data"
     [[ ! -f "$marker_backup" ]] || mv "$marker_backup" "$LOGIN_MARKER"
+    ln -sfn "$previous" "$CURRENT_LINK"
+    install_service
     restart_service || true
-    die "重新授权失败，已恢复原登录态。"
+    die "重新授权失败，已恢复原版本和登录态。"
   fi
 }
 

@@ -154,6 +154,7 @@ journalctl -u gmgn-twitter-monitor -f
 | SQLite | `/var/lib/gmgn-twitter-monitor/twitter_monitor.db` |
 | 文件日志 | `/var/lib/gmgn-twitter-monitor/twitter_monitor.log` |
 | 运行截图 | `/var/lib/gmgn-twitter-monitor/monitor_running.png` |
+| 授权失败截图 | `/var/lib/gmgn-twitter-monitor/login_failed.png` |
 
 ## 卸载
 
@@ -175,6 +176,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/21Hzzzz/GmgnTwitterTgAlert/m
 
 - `Bot 无法访问群组`：确认 Bot 已加入群组，群组 ID 正确，并拥有发消息权限。
 - `代理无法连通`：运行 `curl --proxy socks5://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace`；WARP 用户再检查 `warp-cli status`。
+- `You are not logged in to GMGN`：执行 `relogin` 并输入新的单次授权链接；授权命令会进入监控页验证实际登录状态，不再仅凭授权页成功加载作判断。
 - `无法定位 Mine/我的`：登录态可能失效，执行 `relogin`。
 - Chromium 启动失败：查看 `journalctl -u gmgn-twitter-monitor -n 100 --no-pager`。
 - 没有翻译：确认 `DEEPSEEK_API_KEY` 有效；赛道分析还要求 handle 位于 `AI_ANALYZE_HANDLES`。

@@ -1,5 +1,6 @@
 import json
 from contextlib import suppress
+from pathlib import Path
 
 from playwright.async_api import BrowserContext, Page, Playwright
 from loguru import logger
@@ -91,13 +92,38 @@ class BrowserManager:
         logger.info("正在访问 GMGN 授权登录页面...")
         await self.page.goto(auth_url, wait_until="domcontentloaded", timeout=60000)
         logger.info("授权页面已加载，等待凭证写入浏览器数据目录...")
-        await self.page.wait_for_timeout(8000)
-        logger.success("GMGN 授权完成，浏览器登录态已保存。")
+        await self.page.wait_for_timeout(10000)
+        await self.goto_monitor_page()
+        await self.assert_logged_in(settle_ms=2000)
+        logger.success("GMGN 授权验证通过，浏览器登录态已保存。")
 
     async def goto_monitor_page(self):
         logger.info(f"正在跳转监控目标网站: {config.MONITOR_URL}")
         await self.page.goto(config.MONITOR_URL, wait_until="domcontentloaded", timeout=60000)
         await self.page.wait_for_timeout(5000)
+
+    async def assert_logged_in(self, settle_ms: int = 0) -> bool:
+        """Verify the rendered GMGN page instead of trusting that tglogin loaded."""
+        if settle_ms:
+            await self.page.wait_for_timeout(settle_ms)
+
+        logged_out = self.page.locator(
+            "xpath=//*[normalize-space()='You are not logged in to GMGN' "
+            "or normalize-space()='您尚未登录 GMGN' "
+            "or normalize-space()='尚未登录 GMGN']"
+        ).first
+        if await logged_out.is_visible(timeout=3000):
+            with suppress(Exception):
+                await self.page.screenshot(path=config.LOGIN_FAILURE_SCREENSHOT)
+            Path(config.LOGIN_REQUIRED_MARKER).touch()
+            raise RuntimeError(
+                "GMGN 页面仍显示未登录；授权链接未成功写入登录态。"
+                f"失败截图: {config.LOGIN_FAILURE_SCREENSHOT}"
+            )
+
+        Path(config.LOGIN_REQUIRED_MARKER).unlink(missing_ok=True)
+        logger.success("GMGN 登录状态校验通过。")
+        return True
 
     async def handle_popups(self):
         logger.info("正在尝试处理可能存在的更新提示弹窗...")
@@ -180,6 +206,7 @@ class BrowserManager:
             await self.page.reload(wait_until="domcontentloaded")
             logger.success("网页刷新指令下发完成，看门狗周期重置。")
         await self.page.wait_for_timeout(5000)
+        await self.assert_logged_in()
         await self.switch_to_mine_tab()
         await self.save_screenshot()
 

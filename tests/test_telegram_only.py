@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from gmgn_twitter_monitor import config
 from gmgn_twitter_monitor.app import MessageDeduplicator, _build_distributor_hub, login_only
@@ -48,13 +48,50 @@ class TelegramOnlyTests(unittest.IsolatedAsyncioTestCase):
 
         browser = BrowserManager()
         browser.page = FakePage()
+        browser.assert_logged_in = AsyncMock(return_value=True)
         await browser.run_login("https://gmgn.ai/tglogin?test=1")
-        await browser.goto_monitor_page()
         self.assertEqual(
             [kwargs["wait_until"] for _, kwargs in browser.page.goto_calls],
             ["domcontentloaded", "domcontentloaded"],
         )
         self.assertTrue(all(kwargs["timeout"] == 60000 for _, kwargs in browser.page.goto_calls))
+        browser.assert_logged_in.assert_awaited_once_with(settle_ms=2000)
+
+    async def test_login_verification_rejects_logged_out_page(self):
+        class FakeLocator:
+            def __init__(self):
+                self.first = self
+
+            async def is_visible(self, timeout=None):
+                return True
+
+        class FakePage:
+            def __init__(self):
+                self.screenshot_path = None
+
+            def locator(self, _selector):
+                return FakeLocator()
+
+            async def wait_for_timeout(self, _milliseconds):
+                return None
+
+            async def screenshot(self, path):
+                self.screenshot_path = path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            failure_path = str(Path(tmp) / "login_failed.png")
+            marker_path = str(Path(tmp) / ".login-required")
+            browser = BrowserManager()
+            browser.page = FakePage()
+            with (
+                patch.object(config, "LOGIN_FAILURE_SCREENSHOT", failure_path),
+                patch.object(config, "LOGIN_REQUIRED_MARKER", marker_path),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "仍显示未登录"):
+                    await browser.assert_logged_in()
+
+            self.assertEqual(browser.page.screenshot_path, failure_path)
+            self.assertTrue(Path(marker_path).is_file())
 
     async def test_mine_tab_uses_dom_click_without_navigation_wait(self):
         class FakeLocator:
@@ -245,6 +282,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn('PYTHONPATH="$release_path"', installer)
         self.assertIn('PYTHONPATH="$CURRENT_LINK"', installer)
         self.assertIn('LOGIN_MARKER="${STATE_DIR}/.login-complete"', installer)
+        self.assertIn('LOGIN_REQUIRED_MARKER="${STATE_DIR}/.login-required"', installer)
         self.assertIn('READY_SCREENSHOT="${STATE_DIR}/monitor_running.png"', installer)
         self.assertIn("User=gmgn-monitor", (Path(__file__).parents[1] / "gmgn-twitter-monitor.service").read_text(encoding="utf-8"))
 
