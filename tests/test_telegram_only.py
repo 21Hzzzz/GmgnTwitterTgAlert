@@ -12,7 +12,12 @@ from unittest.mock import AsyncMock, patch
 from gmgn_twitter_monitor import config
 from gmgn_twitter_monitor.app import MessageDeduplicator, _build_distributor_hub, login_only
 from gmgn_twitter_monitor.browser import BrowserManager
-from gmgn_twitter_monitor.distributor import TelegramDistributor
+from gmgn_twitter_monitor.distributor import (
+    TG_TEXT_LIMIT,
+    TelegramDistributor,
+    _TelegramHTMLParser,
+    _truncate_html_visible,
+)
 from gmgn_twitter_monitor.storage import SQLiteStorage
 from gmgn_twitter_monitor.summary_scheduler import DailySummaryScheduler
 
@@ -287,6 +292,33 @@ class TelegramOnlyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("—— 🇨🇳 中文翻译 ——", text)
         self.assertIn('你好 <a href="https://x.com/alice">@alice</a>', text)
         self.assertLess(text.index("Hello"), text.index("—— 🇨🇳 中文翻译 ——"))
+
+    async def test_html_source_over_4096_is_not_truncated_when_visible_text_fits(self):
+        source = "".join(
+            f'<a href="https://x.com/user{i}">@u{i}</a>' for i in range(200)
+        )
+        self.assertGreater(len(source), TG_TEXT_LIMIT)
+
+        result = _truncate_html_visible(source, TG_TEXT_LIMIT)
+
+        self.assertEqual(result, source)
+
+    async def test_visible_length_truncation_keeps_html_balanced(self):
+        source = (
+            '<blockquote><a href="https://x.com/alice">'
+            + ("x" * 5000)
+            + "</a></blockquote>"
+        )
+
+        result = _truncate_html_visible(source, TG_TEXT_LIMIT)
+        parsed = _TelegramHTMLParser()
+        parsed.feed(result)
+        parsed.close()
+
+        self.assertLessEqual(parsed.visible_length, TG_TEXT_LIMIT)
+        self.assertEqual(result.count("<a "), result.count("</a>"))
+        self.assertEqual(result.count("<blockquote>"), result.count("</blockquote>"))
+        self.assertTrue(result.endswith("[内容过长，已截断]"))
 
     async def test_snapshot_then_complete_only_dispatches_telegram_targets(self):
         published = []

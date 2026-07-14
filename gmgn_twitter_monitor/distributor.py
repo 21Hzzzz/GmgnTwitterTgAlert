@@ -1,8 +1,10 @@
 import asyncio
+import html as html_lib
 import json
 import re
 from contextlib import suppress
 from datetime import datetime, timezone, timedelta
+from html.parser import HTMLParser
 
 import aiohttp
 from loguru import logger
@@ -11,6 +13,90 @@ from . import config as cfg
 
 
 TEXT_ENRICHMENT_ACTIONS = {"tweet", "reply", "quote", "repost"}
+TG_TEXT_LIMIT = 4096
+TG_CAPTION_LIMIT = 1024
+
+
+class _TelegramHTMLParser(HTMLParser):
+    """Tokenize the small HTML subset emitted for Telegram messages."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.events: list[tuple[str, str, str | None]] = []
+        self.visible_length = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        self.events.append(("start", self.get_starttag_text(), tag))
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self.events.append(("void", self.get_starttag_text(), tag))
+
+    def handle_endtag(self, tag: str) -> None:
+        self.events.append(("end", f"</{tag}>", tag))
+
+    def handle_data(self, data: str) -> None:
+        self.events.append(("data", data, None))
+        self.visible_length += len(data)
+
+    def handle_entityref(self, name: str) -> None:
+        self.events.append(("entity", f"&{name};", None))
+        self.visible_length += 1
+
+    def handle_charref(self, name: str) -> None:
+        self.events.append(("entity", f"&#{name};", None))
+        self.visible_length += 1
+
+
+def _truncate_html_visible(
+    source: str,
+    max_visible: int,
+    suffix: str = "\n[内容过长，已截断]",
+) -> str:
+    """Truncate parsed visible text while keeping Telegram HTML balanced."""
+    parser = _TelegramHTMLParser()
+    parser.feed(source)
+    parser.close()
+    if parser.visible_length <= max_visible:
+        return source
+
+    suffix = suffix[:max_visible]
+    content_limit = max(0, max_visible - len(suffix))
+    output: list[str] = []
+    open_tags: list[str] = []
+    visible_length = 0
+
+    for kind, raw, tag in parser.events:
+        if kind == "start":
+            output.append(raw)
+            if tag:
+                open_tags.append(tag)
+            continue
+        if kind == "void":
+            output.append(raw)
+            continue
+        if kind == "end":
+            output.append(raw)
+            if tag in open_tags:
+                reverse_index = open_tags[::-1].index(tag)
+                del open_tags[len(open_tags) - reverse_index - 1]
+            continue
+
+        remaining = content_limit - visible_length
+        if remaining <= 0:
+            break
+        if kind == "entity":
+            output.append(raw)
+            visible_length += 1
+        elif kind == "data":
+            taken = raw[:remaining]
+            output.append(taken)
+            visible_length += len(taken)
+            if len(taken) < len(raw):
+                break
+
+    output.extend(f"</{tag}>" for tag in reversed(open_tags))
+    output.append(html_lib.escape(suffix, quote=False))
+    return "".join(output)
 
 
 def _diag_enabled(message_or_handle) -> bool:
@@ -417,9 +503,11 @@ class TelegramDistributor(BaseDistributor):
         if not self._session or not target_channel_id or not text:
             return False
 
-        text_to_send = text
-        if len(text_to_send) > 3900:
-            text_to_send = text_to_send[:3900] + "\n\n[摘要过长，内容已截断]"
+        text_to_send = _truncate_html_visible(
+            text,
+            TG_TEXT_LIMIT,
+            suffix="\n\n[摘要过长，内容已截断]",
+        )
 
         payload = {
             "chat_id": target_channel_id,
@@ -490,10 +578,13 @@ class TelegramDistributor(BaseDistributor):
             main_text == text_parts.get("content", "") and 
             ref_text == text_parts.get("reference", "") and 
             bio_text == text_parts.get("bio", "")):
-            base_text = f"{self._format_message(message)}\n\n{footer}"
+            base_text = _truncate_html_visible(
+                f"{self._format_message(message)}\n\n{footer}",
+                TG_TEXT_LIMIT,
+            )
             if (
                 current_text
-                and base_text[:4096] == current_text[:4096]
+                and base_text == current_text
                 and (link_preview_options or {}) == (current_link_preview_options or {})
             ):
                 logger.info(f"🌐 翻译结果与原文相同，完整版无需刷新: {target_channel_id}")
@@ -502,7 +593,7 @@ class TelegramDistributor(BaseDistributor):
             payload = {
                 "chat_id": target_channel_id,
                 "message_id": message_id,
-                "text": base_text[:4096],
+                "text": base_text,
                 "parse_mode": "HTML",
             }
             if link_preview_options:
@@ -550,13 +641,14 @@ class TelegramDistributor(BaseDistributor):
             f"{original_html}\n\n{analysis_block}{separator}"
             f"{translated_html}\n\n{footer}"
         )
+        new_text = _truncate_html_visible(new_text, TG_TEXT_LIMIT)
 
         handle = message.get("author", {}).get("handle", "?")
 
         payload = {
             "chat_id": target_channel_id,
             "message_id": message_id,
-            "text": new_text[:4096],
+            "text": new_text,
             "parse_mode": "HTML",
         }
         # 保持与 sendMessage 一致的预览设置，防止编辑时卡片丢失
@@ -597,7 +689,10 @@ class TelegramDistributor(BaseDistributor):
         if not before_url or not after_url:
             return False
 
-        caption = self._format_message(message)[:1024]
+        caption = _truncate_html_visible(
+            self._format_message(message),
+            TG_CAPTION_LIMIT,
+        )
         media = json.dumps([
             {"type": "photo", "media": before_url, "caption": caption, "parse_mode": "HTML"},
             {"type": "photo", "media": after_url},
@@ -648,14 +743,17 @@ class TelegramDistributor(BaseDistributor):
 
         # ──── 头部与正文 ────
         header = self._format_message(message)
-        initial_text = f"{header}\n\n{footer}"
+        initial_text = _truncate_html_visible(
+            f"{header}\n\n{footer}",
+            TG_TEXT_LIMIT,
+        )
         
         # ──── 动态计算预览链接 (统一由 _compute_link_preview_options 计算) ────
         link_preview_options = self._compute_link_preview_options(message, handle, action)
 
         payload = {
             "chat_id": target_channel_id,
-            "text": initial_text[:4096],
+            "text": initial_text,
             "parse_mode": "HTML",
             "link_preview_options": link_preview_options
         }
@@ -692,7 +790,7 @@ class TelegramDistributor(BaseDistributor):
                     "footer": footer,
                     "channel_id": target_channel_id,
                     "link_preview_options": link_preview_options,
-                    "initial_text": initial_text[:4096],
+                    "initial_text": initial_text,
                 }
             _diag_log(message, f"TG sendMessage 成功但缺少 message_id channel={target_channel_id}", level="warning")
         else:
@@ -883,7 +981,10 @@ class TelegramDistributor(BaseDistributor):
             # 使用 cp=1 完整数据重新计算预览链接（TG_FAST cp=0 可能缺少 reference）
             updated_lpo = self._compute_link_preview_options(message, handle, action)
             updated_footer = self._build_footer(message, handle, action)
-            updated_base_text = f"{self._format_message(message)}\n\n{updated_footer}"[:4096]
+            updated_base_text = _truncate_html_visible(
+                f"{self._format_message(message)}\n\n{updated_footer}",
+                TG_TEXT_LIMIT,
+            )
 
             refresh_tasks = []
             for r in push_contexts:
