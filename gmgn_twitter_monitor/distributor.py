@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from contextlib import suppress
 from datetime import datetime, timezone, timedelta
 
@@ -68,6 +69,10 @@ class TelegramDistributor(BaseDistributor):
     支持按 author.handle 白名单过滤；内置 429 Rate-Limit 自动退避重试。
     """
 
+    X_MENTION_PATTERN = re.compile(
+        r"(?<![A-Za-z0-9_@/])@([A-Za-z0-9_]{1,15})(?![A-Za-z0-9_])"
+    )
+
     def __init__(self, bot_token: str, default_channel_id: str, enable_default: bool = False, channel_map: dict[str, str] | None = None, filter_handles: list[str] | None = None, storage=None):
         self.bot_token = bot_token
         self.default_channel_id = default_channel_id
@@ -122,15 +127,16 @@ class TelegramDistributor(BaseDistributor):
         """转义 HTML 特殊字符。"""
         return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    @staticmethod
-    def _wrap_blockquote(content: str, raw_text_len: int, threshold: int = 128) -> str:
-        """根据原始文本长度决定是否使用可折叠 blockquote。
-
-        ≤ threshold: 普通 blockquote，完整展示
-        > threshold: expandable blockquote，折叠后默认显示 3 行
-        """
-        tag = "blockquote expandable" if raw_text_len > threshold else "blockquote"
-        return f"<{tag}>{content}</blockquote>"
+    @classmethod
+    def _format_text_with_x_mentions(cls, text: str) -> str:
+        escaped = cls._escape_html(text)
+        return cls.X_MENTION_PATTERN.sub(
+            lambda match: (
+                f'<a href="https://x.com/{match.group(1)}">'
+                f"@{match.group(1)}</a>"
+            ),
+            escaped,
+        )
 
     def _format_followers(self, count: int | None) -> str:
         """格式化粉丝数为可读字符串。"""
@@ -335,9 +341,9 @@ class TelegramDistributor(BaseDistributor):
             bio_change = msg.get("bio_change")
             if bio_change:
                 lines.append("\n<b>旧简介:</b>")
-                lines.append(self._escape_html(bio_change.get("before", "")))
+                lines.append(self._format_text_with_x_mentions(bio_change.get("before", "")))
                 lines.append("\n<b>新简介:</b>")
-                lines.append(self._escape_html(bio_change.get("after", "")))
+                lines.append(self._format_text_with_x_mentions(bio_change.get("after", "")))
         elif action == "banner":
             banner_change = msg.get("banner_change")
             if banner_change:
@@ -356,7 +362,7 @@ class TelegramDistributor(BaseDistributor):
                     if len(text) > 800:
                         text = text[:800] + "...\n[⬇️ 正文过长已截断]"
                     lines.append("")
-                    lines.append(self._wrap_blockquote(self._escape_html(text), len(text)))
+                    lines.append(self._format_text_with_x_mentions(text))
 
                 # 展示 reference.text（被回复/引用/转推/删帖的原文），用 blockquote 区分
                 reference = msg.get("reference") or {}
@@ -365,7 +371,10 @@ class TelegramDistributor(BaseDistributor):
                     if len(ref_text) > 500:
                         ref_text = ref_text[:500] + "...\n[⬇️ 原推过长已截断]"
                     lines.append("")
-                    lines.append(self._wrap_blockquote(f"💬 原推：\n{self._escape_html(ref_text)}", len(ref_text)))
+                    lines.append(
+                        f"<blockquote>💬 原推：\n"
+                        f"{self._format_text_with_x_mentions(ref_text)}</blockquote>"
+                    )
 
         return "\n".join(lines)
 
@@ -507,20 +516,11 @@ class TelegramDistributor(BaseDistributor):
                 logger.warning(f"📱 TG 完整版刷新失败: @{handle} -> {target_channel_id}")
             return
 
-        def format_part(translated: str, original: str, is_ref: bool = False) -> str:
+        def format_part(translated: str, is_ref: bool = False) -> str:
             limit = 500 if is_ref else 800
-            if len(translated) > limit: 
+            if len(translated) > limit:
                 translated = translated[:limit] + "...\n[⬇️ 译文过长已截断]"
-            escaped = self._escape_html(translated)
-            
-            # 如果原文较短（<=80字符）且有实际翻译，附加斜体原文做对比
-            if original and len(original) <= 80 and original.strip() != translated.strip():
-                # 排查纯表情或纯标点：要求必须包含至少一个字母或数字
-                if any(c.isalpha() or c.isdigit() for c in original):
-                    # 为了美观，去掉末尾的回车并包裹在括号斜体中
-                    orig_clean = original.strip().replace('\n', ' ')
-                    escaped += f"\n(<i>{self._escape_html(orig_clean)}</i>)"
-            return escaped
+            return self._format_text_with_x_mentions(translated)
 
         # ──── 组装分析区块（置顶） ────
         analysis_block = ""
@@ -536,18 +536,20 @@ class TelegramDistributor(BaseDistributor):
         translated_html_parts = []
         if main_text or bio_text:
             t_text = main_text if main_text else bio_text
-            o_text = text_parts.get("content", "") if main_text else text_parts.get("bio", "")
-            translated_html_parts.append(self._wrap_blockquote(format_part(t_text, o_text, is_ref=False), len(t_text)))
+            translated_html_parts.append(format_part(t_text, is_ref=False))
         if ref_text:
-            o_ref = text_parts.get("reference", "")
-            escaped_ref = format_part(ref_text, o_ref, is_ref=True)
-            translated_html_parts.append(self._wrap_blockquote(f"💬 原推翻译：\n{escaped_ref}", len(ref_text)))
+            escaped_ref = format_part(ref_text, is_ref=True)
+            translated_html_parts.append(
+                f"<blockquote>💬 原推翻译：\n{escaped_ref}</blockquote>"
+            )
 
         translated_html = "\n\n".join(translated_html_parts)
-        
-        separator = "—— 🌐 中文翻译 ——\n" if not has_analysis else "—— 🧠 AI 分析 + 翻译 ——\n"
-        current_header_no_text = self._format_message(message, include_text=False)
-        new_text = f"{current_header_no_text}\n\n{separator}{analysis_block}{translated_html}\n\n{footer}"
+        original_html = self._format_message(message)
+        separator = "—— 🇨🇳 中文翻译 ——\n"
+        new_text = (
+            f"{original_html}\n\n{analysis_block}{separator}"
+            f"{translated_html}\n\n{footer}"
+        )
 
         handle = message.get("author", {}).get("handle", "?")
 

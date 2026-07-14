@@ -234,6 +234,60 @@ class TelegramOnlyTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(telegram._target_channel_ids("bob"), ["-100-all"])
 
+    async def test_telegram_body_and_reference_use_me_format(self):
+        telegram = TelegramDistributor("token", "-100-all", enable_default=True)
+        message = {
+            "action": "reply",
+            "tweet_id": "123",
+            "timestamp": 1,
+            "author": {"handle": "author", "name": "Author", "followers": 10},
+            "content": {"text": "Hello @alice", "media": []},
+            "reference": {
+                "text": "Original from @bob",
+                "author_handle": "bob",
+                "author_name": "Bob",
+                "author_followers": 20,
+                "tweet_id": "456",
+                "media": [],
+            },
+        }
+
+        formatted = telegram._format_message(message)
+
+        self.assertIn('Hello <a href="https://x.com/alice">@alice</a>', formatted)
+        self.assertNotIn("<blockquote>Hello", formatted)
+        self.assertIn("<blockquote>💬 原推：", formatted)
+        self.assertIn('<a href="https://x.com/bob">@bob</a></blockquote>', formatted)
+        self.assertNotIn("blockquote expandable", formatted)
+
+    async def test_translation_keeps_original_and_appends_me_translation(self):
+        telegram = TelegramDistributor("token", "-100-all", enable_default=True)
+        telegram._send_api = AsyncMock(return_value={"ok": True})
+        message = {
+            "action": "tweet",
+            "tweet_id": "123",
+            "timestamp": 1,
+            "author": {"handle": "author", "name": "Author", "followers": 10},
+            "content": {"text": "Hello @alice", "media": []},
+            "reference": None,
+        }
+
+        await telegram._translate_and_edit(
+            99,
+            telegram._format_message(message, include_text=False),
+            "🕒 推文时间: test",
+            message,
+            {"content": "你好 @alice"},
+            "-100-all",
+        )
+
+        payload = telegram._send_api.await_args.args[1]
+        text = payload["text"]
+        self.assertIn('Hello <a href="https://x.com/alice">@alice</a>', text)
+        self.assertIn("—— 🇨🇳 中文翻译 ——", text)
+        self.assertIn('你好 <a href="https://x.com/alice">@alice</a>', text)
+        self.assertLess(text.index("Hello"), text.index("—— 🇨🇳 中文翻译 ——"))
+
     async def test_snapshot_then_complete_only_dispatches_telegram_targets(self):
         published = []
 
