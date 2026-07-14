@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from gmgn_twitter_monitor import config
 from gmgn_twitter_monitor.app import MessageDeduplicator, _build_distributor_hub, login_only
+from gmgn_twitter_monitor.browser import BrowserManager
 from gmgn_twitter_monitor.distributor import TelegramDistributor
 from gmgn_twitter_monitor.storage import SQLiteStorage
 from gmgn_twitter_monitor.summary_scheduler import DailySummaryScheduler
@@ -34,6 +35,27 @@ class _Message:
 
 
 class TelegramOnlyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_browser_navigation_does_not_wait_for_network_idle(self):
+        class FakePage:
+            def __init__(self):
+                self.goto_calls = []
+
+            async def goto(self, url, **kwargs):
+                self.goto_calls.append((url, kwargs))
+
+            async def wait_for_timeout(self, _milliseconds):
+                return None
+
+        browser = BrowserManager()
+        browser.page = FakePage()
+        await browser.run_login("https://gmgn.ai/tglogin?test=1")
+        await browser.goto_monitor_page()
+        self.assertEqual(
+            [kwargs["wait_until"] for _, kwargs in browser.page.goto_calls],
+            ["domcontentloaded", "domcontentloaded"],
+        )
+        self.assertTrue(all(kwargs["timeout"] == 60000 for _, kwargs in browser.page.goto_calls))
+
     async def test_all_group_is_always_added_to_routed_targets(self):
         telegram = TelegramDistributor(
             "token",
@@ -185,6 +207,8 @@ class ConfigurationTests(unittest.TestCase):
         self.assertNotIn("TG_ROUTING_ALL", installer)
         self.assertIn('PYTHONPATH="$release_path"', installer)
         self.assertIn('PYTHONPATH="$CURRENT_LINK"', installer)
+        self.assertIn('LOGIN_MARKER="${STATE_DIR}/.login-complete"', installer)
+        self.assertIn('READY_SCREENSHOT="${STATE_DIR}/monitor_running.png"', installer)
         self.assertIn("User=gmgn-monitor", (Path(__file__).parents[1] / "gmgn-twitter-monitor.service").read_text(encoding="utf-8"))
 
 

@@ -89,14 +89,14 @@ class BrowserManager:
 
     async def run_login(self, auth_url: str):
         logger.info("正在访问 GMGN 授权登录页面...")
-        await self.page.goto(auth_url, wait_until="networkidle")
+        await self.page.goto(auth_url, wait_until="domcontentloaded", timeout=60000)
         logger.info("授权页面已加载，等待凭证写入浏览器数据目录...")
         await self.page.wait_for_timeout(8000)
         logger.success("GMGN 授权完成，浏览器登录态已保存。")
 
     async def goto_monitor_page(self):
         logger.info(f"正在跳转监控目标网站: {config.MONITOR_URL}")
-        await self.page.goto(config.MONITOR_URL, wait_until="networkidle")
+        await self.page.goto(config.MONITOR_URL, wait_until="domcontentloaded", timeout=60000)
         await self.page.wait_for_timeout(5000)
 
     async def handle_popups(self):

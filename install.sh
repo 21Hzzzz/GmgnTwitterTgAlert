@@ -12,6 +12,8 @@ PYTHON_DIR="${APP_DIR}/python"
 ENV_DIR="/etc/${APP_NAME}"
 ENV_FILE="${ENV_DIR}/gmgn.env"
 STATE_DIR="/var/lib/${APP_NAME}"
+LOGIN_MARKER="${STATE_DIR}/.login-complete"
+READY_SCREENSHOT="${STATE_DIR}/monitor_running.png"
 BACKUP_ROOT="/root/${APP_NAME}-backups"
 REPO_URL="${GMGN_REPO_URL:-https://github.com/21Hzzzz/GmgnTwitterTgAlert.git}"
 REPO_REF="${GMGN_REF:-main}"
@@ -372,17 +374,20 @@ run_login() {
     warn "授权流程结束，但未检测到浏览器登录态。"
     return 1
   fi
+  touch "$LOGIN_MARKER"
+  chown "$SERVICE_USER:$SERVICE_USER" "$LOGIN_MARKER"
+  chmod 0600 "$LOGIN_MARKER"
   ok "GMGN 登录态已保存。"
 }
 
 health_check() {
   local i stable=0
-  for i in {1..15}; do
+  for i in {1..45}; do
     sleep 2
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
+    if systemctl is-active --quiet "$SERVICE_NAME" && [[ -s "$READY_SCREENSHOT" ]]; then
       stable=$((stable + 1))
-      if [[ "$stable" -ge 5 ]]; then
-        ok "systemd 服务已连续稳定运行 10 秒。"
+      if [[ "$stable" -ge 3 ]]; then
+        ok "服务已进入监听页面并稳定运行。"
         return 0
       fi
     else
@@ -391,6 +396,11 @@ health_check() {
   done
   journalctl -u "$SERVICE_NAME" -n 80 --no-pager || true
   return 1
+}
+
+restart_service() {
+  rm -f -- "$READY_SCREENSHOT"
+  systemctl restart "$SERVICE_NAME"
 }
 
 do_install() {
@@ -414,16 +424,16 @@ do_install() {
   ln -sfn "$NEW_RELEASE" "$CURRENT_LINK"
   install_service
 
-  if ! find "${STATE_DIR}/browser_data" -mindepth 1 -print -quit 2>/dev/null | grep -q .; then
+  if [[ ! -f "$LOGIN_MARKER" ]]; then
     run_login || die "首次 GMGN 授权失败。"
   fi
 
-  systemctl restart "$SERVICE_NAME"
+  restart_service
   if ! health_check; then
     if [[ -n "$previous" && -d "$previous" ]]; then
       warn "新版本健康检查失败，正在恢复旧版本。"
       ln -sfn "$previous" "$CURRENT_LINK"
-      systemctl restart "$SERVICE_NAME" || true
+      restart_service || true
     fi
     die "安装后的服务健康检查失败。"
   fi
@@ -437,25 +447,32 @@ do_reconfigure() {
   [[ -x "$CURRENT_LINK/.venv/bin/python" ]] || die "尚未安装，请先运行默认安装命令。"
   configure_proxy
   write_configuration
-  systemctl restart "$SERVICE_NAME"
+  restart_service
   health_check || die "重新配置后服务启动失败。"
 }
 
 do_relogin() {
   [[ -x "$CURRENT_LINK/.venv/bin/python" ]] || die "尚未安装。"
   local backup="${STATE_DIR}/browser_data.before-relogin"
+  local marker_backup="${LOGIN_MARKER}.before-relogin"
   rm -rf -- "$backup"
+  rm -f -- "$marker_backup"
   if [[ -d "${STATE_DIR}/browser_data" ]]; then
     mv "${STATE_DIR}/browser_data" "$backup"
   fi
+  if [[ -f "$LOGIN_MARKER" ]]; then
+    mv "$LOGIN_MARKER" "$marker_backup"
+  fi
   if run_login; then
     rm -rf -- "$backup"
-    systemctl restart "$SERVICE_NAME"
+    rm -f -- "$marker_backup"
+    restart_service
     health_check || die "重新授权成功，但服务启动失败。"
   else
     rm -rf -- "${STATE_DIR}/browser_data"
     [[ ! -d "$backup" ]] || mv "$backup" "${STATE_DIR}/browser_data"
-    systemctl restart "$SERVICE_NAME" || true
+    [[ ! -f "$marker_backup" ]] || mv "$marker_backup" "$LOGIN_MARKER"
+    restart_service || true
     die "重新授权失败，已恢复原登录态。"
   fi
 }
