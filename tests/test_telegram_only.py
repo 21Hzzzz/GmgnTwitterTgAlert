@@ -60,18 +60,19 @@ class TelegramOnlyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_login_verification_rejects_logged_out_page(self):
         class FakeLocator:
-            def __init__(self):
+            def __init__(self, visible=True):
                 self.first = self
+                self.visible = visible
 
             async def is_visible(self, timeout=None):
-                return True
+                return self.visible
 
         class FakePage:
             def __init__(self):
                 self.screenshot_path = None
 
-            def locator(self, _selector):
-                return FakeLocator()
+            def locator(self, selector):
+                return FakeLocator("You are not logged" in selector)
 
             async def wait_for_timeout(self, _milliseconds):
                 return None
@@ -88,11 +89,41 @@ class TelegramOnlyTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(config, "LOGIN_FAILURE_SCREENSHOT", failure_path),
                 patch.object(config, "LOGIN_REQUIRED_MARKER", marker_path),
             ):
-                with self.assertRaisesRegex(RuntimeError, "仍显示未登录"):
+                with self.assertRaisesRegex(RuntimeError, "持续显示 Log In/未登录"):
                     await browser.assert_logged_in()
 
             self.assertEqual(browser.page.screenshot_path, failure_path)
             self.assertTrue(Path(marker_path).is_file())
+
+    async def test_login_verification_requires_stable_positive_ui(self):
+        class FakeLocator:
+            def __init__(self, visible):
+                self.first = self
+                self.visible = visible
+
+            async def is_visible(self, timeout=None):
+                return self.visible
+
+        class FakePage:
+            def locator(self, selector):
+                return FakeLocator("role='tab'" in selector)
+
+            async def wait_for_timeout(self, _milliseconds):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            marker_path = str(Path(tmp) / ".login-required")
+            browser = BrowserManager()
+            browser.page = FakePage()
+            browser.save_storage_state = AsyncMock()
+            browser.save_session_storage = AsyncMock()
+            with patch.object(config, "LOGIN_REQUIRED_MARKER", marker_path):
+                self.assertTrue(
+                    await browser.assert_logged_in(timeout_ms=3000)
+                )
+
+            browser.save_storage_state.assert_awaited_once()
+            browser.save_session_storage.assert_awaited_once()
 
     async def test_session_storage_is_saved_and_restored(self):
         class FakePage:
@@ -123,6 +154,35 @@ class TelegramOnlyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(reader.context.scripts), 1)
             self.assertIn("test-token", reader.context.scripts[0])
             self.assertIn("window.sessionStorage.setItem", reader.context.scripts[0])
+
+    async def test_full_storage_state_is_saved_and_restored(self):
+        class FakeContext:
+            def __init__(self):
+                self.restored = None
+
+            async def storage_state(self, indexed_db=None):
+                self.indexed_db = indexed_db
+                return {
+                    "cookies": [{"name": "auth", "value": "test"}],
+                    "origins": [{"origin": "https://gmgn.ai", "localStorage": []}],
+                }
+
+            async def set_storage_state(self, storage):
+                self.restored = storage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = str(Path(tmp) / "storage.json")
+            with patch.object(config, "GMGN_STORAGE_STATE_PATH", state_path):
+                writer = BrowserManager()
+                writer.context = FakeContext()
+                await writer.save_storage_state()
+                self.assertTrue(writer.context.indexed_db)
+
+                reader = BrowserManager()
+                reader.context = FakeContext()
+                await reader._restore_storage_state()
+
+            self.assertEqual(reader.context.restored["cookies"][0]["name"], "auth")
 
     async def test_mine_tab_uses_dom_click_without_navigation_wait(self):
         class FakeLocator:
@@ -315,6 +375,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn('LOGIN_MARKER="${STATE_DIR}/.login-complete"', installer)
         self.assertIn('LOGIN_REQUIRED_MARKER="${STATE_DIR}/.login-required"', installer)
         self.assertIn('SESSION_STORAGE_FILE="${STATE_DIR}/gmgn_session_storage.json"', installer)
+        self.assertIn('STORAGE_STATE_FILE="${STATE_DIR}/gmgn_storage_state.json"', installer)
         self.assertIn('READY_SCREENSHOT="${STATE_DIR}/monitor_running.png"', installer)
         self.assertIn("User=gmgn-monitor", (Path(__file__).parents[1] / "gmgn-twitter-monitor.service").read_text(encoding="utf-8"))
 

@@ -26,6 +26,7 @@ class BrowserManager:
                 "--start-maximized",
             ],
         )
+        await self._restore_storage_state()
         await self._restore_session_storage()
         await self._install_ws_subscription_filter()
         restored_pages = list(self.context.pages)
@@ -44,6 +45,44 @@ class BrowserManager:
                 "使用已注入脚本的新页面"
             )
         return self.page
+
+    async def _restore_storage_state(self) -> None:
+        if not self.context:
+            return
+        storage_path = Path(config.GMGN_STORAGE_STATE_PATH)
+        if not storage_path.is_file():
+            return
+        try:
+            storage = json.loads(storage_path.read_text(encoding="utf-8"))
+            if not isinstance(storage, dict):
+                raise ValueError("storage state 文件不是 JSON 对象")
+            await self.context.set_storage_state(storage)
+            logger.success(
+                "已加载 GMGN 完整浏览器登录态"
+                f"（Cookie {len(storage.get('cookies', []))} 项，"
+                f"来源 {len(storage.get('origins', []))} 项）。"
+            )
+        except Exception as error:
+            logger.warning(f"读取 GMGN 完整浏览器登录态失败，将继续启动: {error}")
+
+    async def save_storage_state(self) -> None:
+        if not self.context:
+            raise RuntimeError("浏览器上下文尚未启动")
+        storage = await self.context.storage_state(indexed_db=True)
+        storage_path = Path(config.GMGN_STORAGE_STATE_PATH)
+        storage_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = storage_path.with_suffix(storage_path.suffix + ".tmp")
+        temporary_path.write_text(
+            json.dumps(storage, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        temporary_path.chmod(0o600)
+        temporary_path.replace(storage_path)
+        logger.success(
+            "已保存 GMGN 完整浏览器登录态"
+            f"（Cookie {len(storage.get('cookies', []))} 项，"
+            f"来源 {len(storage.get('origins', []))} 项）。"
+        )
 
     async def _restore_session_storage(self) -> None:
         if not self.context:
@@ -152,8 +191,8 @@ class BrowserManager:
         await self.page.goto(config.MONITOR_URL, wait_until="domcontentloaded", timeout=60000)
         await self.page.wait_for_timeout(5000)
 
-    async def assert_logged_in(self, settle_ms: int = 0) -> bool:
-        """Verify the rendered GMGN page instead of trusting that tglogin loaded."""
+    async def assert_logged_in(self, settle_ms: int = 0, timeout_ms: int = 30000) -> bool:
+        """Require stable positive UI evidence that GMGN is authenticated."""
         if settle_ms:
             await self.page.wait_for_timeout(settle_ms)
 
@@ -162,19 +201,52 @@ class BrowserManager:
             "or normalize-space()='您尚未登录 GMGN' "
             "or normalize-space()='尚未登录 GMGN']"
         ).first
-        if await logged_out.is_visible(timeout=3000):
-            with suppress(Exception):
-                await self.page.screenshot(path=config.LOGIN_FAILURE_SCREENSHOT)
-            Path(config.LOGIN_REQUIRED_MARKER).touch()
-            raise RuntimeError(
-                "GMGN 页面仍显示未登录；授权链接未成功写入登录态。"
-                f"失败截图: {config.LOGIN_FAILURE_SCREENSHOT}"
-            )
+        login_button = self.page.locator(
+            "xpath=//button[normalize-space()='Log In' or normalize-space()='登录']"
+        ).first
+        ready_tab = self.page.locator(
+            "xpath=//*[@role='tab' and (normalize-space()='我的' "
+            "or normalize-space()='Mine' or normalize-space()='关注' "
+            "or normalize-space()='Following')]"
+        ).first
 
-        Path(config.LOGIN_REQUIRED_MARKER).unlink(missing_ok=True)
-        await self.save_session_storage()
-        logger.success("GMGN 登录状态校验通过。")
-        return True
+        authenticated_streak = 0
+        logged_out_streak = 0
+        checks = max(3, timeout_ms // 1000)
+        for _ in range(checks):
+            await self.page.wait_for_timeout(1000)
+            has_logged_out_message = await logged_out.is_visible(timeout=250)
+            has_login_button = await login_button.is_visible(timeout=250)
+            page_ready = await ready_tab.is_visible(timeout=250)
+            if has_logged_out_message or has_login_button:
+                logged_out_streak += 1
+                authenticated_streak = 0
+                if logged_out_streak >= 3:
+                    break
+                continue
+            logged_out_streak = 0
+            if page_ready:
+                authenticated_streak += 1
+                if authenticated_streak >= 3:
+                    Path(config.LOGIN_REQUIRED_MARKER).unlink(missing_ok=True)
+                    await self.save_storage_state()
+                    await self.save_session_storage()
+                    logger.success("GMGN 登录状态校验通过。")
+                    return True
+            else:
+                authenticated_streak = 0
+
+        with suppress(Exception):
+            await self.page.screenshot(path=config.LOGIN_FAILURE_SCREENSHOT)
+        Path(config.LOGIN_REQUIRED_MARKER).touch()
+        if logged_out_streak >= 3:
+            reason = "页面持续显示 Log In/未登录标志"
+        else:
+            reason = "页面在超时时间内未出现稳定的已登录标志"
+        raise RuntimeError(
+            f"GMGN 登录状态校验失败：{reason}。"
+            f"失败截图: {config.LOGIN_FAILURE_SCREENSHOT}"
+        )
 
     async def handle_popups(self):
         logger.info("正在尝试处理可能存在的更新提示弹窗...")
