@@ -26,6 +26,7 @@ class BrowserManager:
                 "--start-maximized",
             ],
         )
+        await self._restore_session_storage()
         await self._install_ws_subscription_filter()
         restored_pages = list(self.context.pages)
         self.page = await self.context.new_page()
@@ -43,6 +44,55 @@ class BrowserManager:
                 "使用已注入脚本的新页面"
             )
         return self.page
+
+    async def _restore_session_storage(self) -> None:
+        if not self.context:
+            return
+        storage_path = Path(config.GMGN_SESSION_STORAGE_PATH)
+        if not storage_path.is_file():
+            return
+        try:
+            storage = json.loads(storage_path.read_text(encoding="utf-8"))
+            if not isinstance(storage, dict):
+                raise ValueError("sessionStorage 文件不是 JSON 对象")
+            storage_json = json.dumps(storage, ensure_ascii=True)
+            script = f"""
+(() => {{
+  if (
+    window.location.hostname === "gmgn.ai" ||
+    window.location.hostname.endsWith(".gmgn.ai")
+  ) {{
+    const storage = {storage_json};
+    for (const [key, value] of Object.entries(storage)) {{
+      window.sessionStorage.setItem(key, value);
+    }}
+  }}
+}})();
+"""
+            await self.context.add_init_script(script)
+            logger.success(
+                f"已加载 GMGN sessionStorage 登录态（{len(storage)} 项）。"
+            )
+        except Exception as error:
+            logger.warning(f"读取 GMGN sessionStorage 登录态失败，将继续启动: {error}")
+
+    async def save_session_storage(self) -> None:
+        storage = await self.page.evaluate(
+            "() => Object.fromEntries(Object.entries(window.sessionStorage))"
+        )
+        if not isinstance(storage, dict):
+            raise RuntimeError("GMGN sessionStorage 返回了非对象数据")
+
+        storage_path = Path(config.GMGN_SESSION_STORAGE_PATH)
+        storage_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = storage_path.with_suffix(storage_path.suffix + ".tmp")
+        temporary_path.write_text(
+            json.dumps(storage, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        temporary_path.chmod(0o600)
+        temporary_path.replace(storage_path)
+        logger.success(f"已保存 GMGN sessionStorage 登录态（{len(storage)} 项）。")
 
     async def _install_ws_subscription_filter(self) -> None:
         if not self.context or not config.GMGN_BLOCK_WS_SUBSCRIBE_CHANNELS:
@@ -122,6 +172,7 @@ class BrowserManager:
             )
 
         Path(config.LOGIN_REQUIRED_MARKER).unlink(missing_ok=True)
+        await self.save_session_storage()
         logger.success("GMGN 登录状态校验通过。")
         return True
 

@@ -516,6 +516,14 @@ async def login_only(auth_url: str) -> None:
         async with async_playwright() as playwright:
             await browser.launch(playwright)
             await browser.run_login(auth_url.strip())
+            await browser.close()
+
+            logger.info("重新启动浏览器，验证登录态能否跨进程恢复...")
+            browser = BrowserManager()
+            await browser.launch(playwright)
+            await browser.goto_monitor_page()
+            await browser.assert_logged_in(settle_ms=1000)
+            logger.success("GMGN 登录态跨浏览器重启验证通过。")
     finally:
         await browser.close()
         vdisplay.stop()

@@ -151,6 +151,7 @@ journalctl -u gmgn-twitter-monitor -f
 | 当前程序 | `/opt/gmgn-twitter-monitor/current` |
 | 配置 | `/etc/gmgn-twitter-monitor/gmgn.env` |
 | 浏览器登录态 | `/var/lib/gmgn-twitter-monitor/browser_data` |
+| 会话登录态 | `/var/lib/gmgn-twitter-monitor/gmgn_session_storage.json` |
 | SQLite | `/var/lib/gmgn-twitter-monitor/twitter_monitor.db` |
 | 文件日志 | `/var/lib/gmgn-twitter-monitor/twitter_monitor.log` |
 | 运行截图 | `/var/lib/gmgn-twitter-monitor/monitor_running.png` |

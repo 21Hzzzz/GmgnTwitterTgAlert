@@ -27,6 +27,9 @@ LOGIN_FAILURE_SCREENSHOT = os.getenv(
 LOGIN_REQUIRED_MARKER = os.getenv(
     "LOGIN_REQUIRED_MARKER", str(STATE_DIR / ".login-required")
 )
+GMGN_SESSION_STORAGE_PATH = os.getenv(
+    "GMGN_SESSION_STORAGE_PATH", str(STATE_DIR / "gmgn_session_storage.json")
+)
 SUMMARY_DB_PATH = os.getenv("SUMMARY_DB_PATH", str(STATE_DIR / "twitter_monitor.db"))
 MONITOR_URL = os.getenv("MONITOR_URL", "https://gmgn.ai/follow?target=xTracker&chain=bsc")
 PROXY_SERVER = os.getenv("PROXY_SERVER", "socks5://127.0.0.1:40000")

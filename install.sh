@@ -14,6 +14,7 @@ ENV_FILE="${ENV_DIR}/gmgn.env"
 STATE_DIR="/var/lib/${APP_NAME}"
 LOGIN_MARKER="${STATE_DIR}/.login-complete"
 LOGIN_REQUIRED_MARKER="${STATE_DIR}/.login-required"
+SESSION_STORAGE_FILE="${STATE_DIR}/gmgn_session_storage.json"
 READY_SCREENSHOT="${STATE_DIR}/monitor_running.png"
 BACKUP_ROOT="/root/${APP_NAME}-backups"
 REPO_URL="${GMGN_REPO_URL:-https://github.com/21Hzzzz/GmgnTwitterTgAlert.git}"
@@ -481,23 +482,29 @@ do_relogin() {
   install_service
   local backup="${STATE_DIR}/browser_data.before-relogin"
   local marker_backup="${LOGIN_MARKER}.before-relogin"
+  local session_backup="${SESSION_STORAGE_FILE}.before-relogin"
   rm -rf -- "$backup"
-  rm -f -- "$marker_backup"
+  rm -f -- "$marker_backup" "$session_backup"
   if [[ -d "${STATE_DIR}/browser_data" ]]; then
     mv "${STATE_DIR}/browser_data" "$backup"
   fi
   if [[ -f "$LOGIN_MARKER" ]]; then
     mv "$LOGIN_MARKER" "$marker_backup"
   fi
+  if [[ -f "$SESSION_STORAGE_FILE" ]]; then
+    mv "$SESSION_STORAGE_FILE" "$session_backup"
+  fi
   if run_login; then
     rm -rf -- "$backup"
-    rm -f -- "$marker_backup"
+    rm -f -- "$marker_backup" "$session_backup"
     restart_service
     health_check || die "重新授权成功，但服务启动失败。"
   else
     rm -rf -- "${STATE_DIR}/browser_data"
     [[ ! -d "$backup" ]] || mv "$backup" "${STATE_DIR}/browser_data"
     [[ ! -f "$marker_backup" ]] || mv "$marker_backup" "$LOGIN_MARKER"
+    rm -f -- "$SESSION_STORAGE_FILE"
+    [[ ! -f "$session_backup" ]] || mv "$session_backup" "$SESSION_STORAGE_FILE"
     ln -sfn "$previous" "$CURRENT_LINK"
     install_service
     restart_service || true

@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import json
 import os
 import sqlite3
 import tempfile
@@ -92,6 +93,36 @@ class TelegramOnlyTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(browser.page.screenshot_path, failure_path)
             self.assertTrue(Path(marker_path).is_file())
+
+    async def test_session_storage_is_saved_and_restored(self):
+        class FakePage:
+            async def evaluate(self, _expression):
+                return {"gmgn_token": "test-token", "theme": "dark"}
+
+        class FakeContext:
+            def __init__(self):
+                self.scripts = []
+
+            async def add_init_script(self, script):
+                self.scripts.append(script)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = str(Path(tmp) / "session.json")
+            with patch.object(config, "GMGN_SESSION_STORAGE_PATH", session_path):
+                writer = BrowserManager()
+                writer.page = FakePage()
+                await writer.save_session_storage()
+
+                saved = json.loads(Path(session_path).read_text(encoding="utf-8"))
+                self.assertEqual(saved["gmgn_token"], "test-token")
+
+                reader = BrowserManager()
+                reader.context = FakeContext()
+                await reader._restore_session_storage()
+
+            self.assertEqual(len(reader.context.scripts), 1)
+            self.assertIn("test-token", reader.context.scripts[0])
+            self.assertIn("window.sessionStorage.setItem", reader.context.scripts[0])
 
     async def test_mine_tab_uses_dom_click_without_navigation_wait(self):
         class FakeLocator:
@@ -283,6 +314,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn('PYTHONPATH="$CURRENT_LINK"', installer)
         self.assertIn('LOGIN_MARKER="${STATE_DIR}/.login-complete"', installer)
         self.assertIn('LOGIN_REQUIRED_MARKER="${STATE_DIR}/.login-required"', installer)
+        self.assertIn('SESSION_STORAGE_FILE="${STATE_DIR}/gmgn_session_storage.json"', installer)
         self.assertIn('READY_SCREENSHOT="${STATE_DIR}/monitor_running.png"', installer)
         self.assertIn("User=gmgn-monitor", (Path(__file__).parents[1] / "gmgn-twitter-monitor.service").read_text(encoding="utf-8"))
 
