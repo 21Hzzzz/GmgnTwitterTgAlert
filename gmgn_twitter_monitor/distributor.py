@@ -1783,6 +1783,206 @@ class WebhookDistributor(BaseDistributor):
 
 
 # ---------------------------------------------------------------------------
+#  Binance Square 聚合端推送分发器
+# ---------------------------------------------------------------------------
+class BinanceSquareWebhookDistributor(BaseDistributor):
+    """将 GMGN Binance Square 信号转换为币安聚合端 newsflash 格式后推送。"""
+
+    VALID_CATEGORIES = {
+        "数字货币及交易对上新",
+        "币安最新动态",
+        "币安最新活动",
+        "法币及交易对上新",
+        "下架讯息",
+        "钱包维护动态",
+        "币安API更新",
+        "空投",
+    }
+
+    def __init__(
+        self,
+        url: str,
+        worker_token: str,
+        handles: list[str] | None = None,
+        notes: dict[str, str] | None = None,
+        category: str = "币安最新动态",
+        lang: str = "zh-CN",
+    ):
+        self.url = url
+        self.worker_token = worker_token
+        self.handles = {h.lower() for h in (handles or []) if h}
+        self.notes = {k.lower(): v for k, v in (notes or {}).items()}
+        self.category = category if category in self.VALID_CATEGORIES else "币安最新动态"
+        self.lang = lang
+        self._session: aiohttp.ClientSession | None = None
+
+    async def start(self):
+        if not self.url:
+            logger.info("🔶 Binance Square Webhook 未配置 URL，已跳过启动")
+            return
+        self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10))
+        handle_desc = ", ".join(sorted(self.handles)) if self.handles else "全部"
+        logger.success(
+            f"🔶 Binance Square Webhook 已启动 "
+            f"(目标: {self.url}, 栏目: {self.category}, 过滤: {handle_desc})"
+        )
+
+    async def stop(self):
+        if self._session:
+            await self._session.close()
+            logger.info("🔶 Binance Square Webhook 已关闭")
+
+    @staticmethod
+    def _pick_cover_url(message: dict) -> str:
+        content = message.get("content") or {}
+        reference = message.get("reference") or {}
+        media = (content.get("media") or []) + (reference.get("media") or [])
+        for preferred_type in ("image", "photo", "thumbnail"):
+            for item in media:
+                if item.get("type") == preferred_type and item.get("url"):
+                    return item["url"]
+        return next((item.get("url") for item in media if item.get("url")), "")
+
+    @staticmethod
+    def _stable_numeric_id(message: dict, handle: str) -> int:
+        raw_id = str(
+            message.get("tweet_id")
+            or message.get("_source_internal_id")
+            or message.get("_internal_id")
+            or message.get("internal_id")
+            or ""
+        )
+        digest = hashlib.sha256(f"binance_square:{handle}:{raw_id}".encode()).hexdigest()
+        return int(digest[:12], 16)
+
+    @staticmethod
+    def _build_square_url(message: dict, handle: str) -> str:
+        post_id = str(message.get("tweet_id") or "").strip()
+        if post_id:
+            return f"https://www.binance.com/en/square/post/{post_id}"
+        return f"https://www.binance.com/en/square/profile/{handle}"
+
+    @staticmethod
+    def _action_label(action: str) -> str:
+        return {
+            "tweet": "发布币安广场动态",
+            "reply": "回复币安广场动态",
+            "quote": "引用币安广场动态",
+            "repost": "转发币安广场动态",
+            "pin": "置顶币安广场动态",
+        }.get(action, action or "币安广场动态")
+
+    def _build_content(self, message: dict, display_name: str, handle: str) -> str:
+        action = message.get("action") or ""
+        content = message.get("content") or {}
+        reference = message.get("reference") or {}
+        lines = [
+            f"{display_name} (@{handle}) {self._action_label(action)}",
+        ]
+
+        text = content.get("text")
+        if text:
+            lines.extend(["", str(text)])
+
+        ref_text = reference.get("text")
+        ref_handle = reference.get("author_handle")
+        if ref_text:
+            ref_title = f"引用 @{ref_handle}" if ref_handle else "引用内容"
+            lines.extend(["", f"{ref_title}:", str(ref_text)])
+
+        return "\n".join(lines).strip()
+
+    def _build_payload(self, message: dict) -> dict | None:
+        author = message.get("author") or {}
+        handle = (author.get("handle") or "").lower()
+        if not handle:
+            return None
+        if self.handles and handle not in self.handles:
+            return None
+
+        action = message.get("action")
+        if action not in {"tweet", "reply", "quote", "repost", "pin"}:
+            return None
+
+        display_name = self.notes.get(handle) or author.get("name") or handle
+        content = self._build_content(message, display_name, handle)
+        if not content:
+            return None
+
+        title_text = (message.get("content") or {}).get("text") or self._action_label(action)
+        title_text = " ".join(str(title_text).split())
+        if len(title_text) > 90:
+            title_text = f"{title_text[:87]}..."
+        title = f"{display_name}: {title_text}" if title_text else f"{display_name} 币安广场动态"
+
+        timestamp = message.get("timestamp") or 0
+        try:
+            pub_time = int(float(timestamp))
+        except (TypeError, ValueError):
+            pub_time = 0
+
+        category = self.category if self.category in self.VALID_CATEGORIES else "币安最新动态"
+        return {
+            "id": self._stable_numeric_id(message, handle),
+            "source": "binance",
+            "title": title,
+            "content": content,
+            "url": self._build_square_url(message, handle),
+            "pub_time": pub_time or int(time.time()),
+            "lang": self.lang,
+            "tags": [category, "币安广场", display_name],
+            "is_hot": False,
+            "is_top": False,
+            "pic": self._pick_cover_url(message),
+            "translation": "",
+            "ai_summary": "",
+        }
+
+    async def distribute(self, message: dict) -> None:
+        if not self.url or not self._session:
+            return
+        if message.get("_dispatch_target") != "DEFAULT":
+            return
+
+        payload = self._build_payload(message)
+        if not payload:
+            return
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-Worker-Token": self.worker_token,
+        }
+
+        try:
+            async with self._session.post(self.url, json=payload, headers=headers) as resp:
+                resp_body = await resp.text()
+                if resp.status >= 300:
+                    logger.error(
+                        f"🔶 Binance Square Webhook 推送失败 "
+                        f"[{resp.status}]: {resp_body[:200]}"
+                    )
+                    return
+                try:
+                    res_json = json.loads(resp_body) if resp_body else {}
+                except json.JSONDecodeError:
+                    res_json = {}
+                if not res_json or res_json.get("status") == "success" or res_json.get("code") == 200:
+                    logger.info(
+                        f"🔶 Binance Square Webhook 推送成功: "
+                        f"@{(message.get('author') or {}).get('handle')} "
+                        f"{payload['id']} [{resp.status}]"
+                    )
+                    return
+                logger.error(f"🔶 Binance Square Webhook 推送失败: {res_json}")
+        except asyncio.TimeoutError:
+            logger.error("🔶 Binance Square Webhook 推送超时 (10s)")
+        except aiohttp.ClientError as e:
+            logger.error(f"🔶 Binance Square Webhook 网络异常: {e}")
+        except Exception as e:
+            logger.error(f"🔶 Binance Square Webhook 未知异常: {e}")
+
+
+# ---------------------------------------------------------------------------
 #  Instagram Webhook HTTP POST 分发器
 # ---------------------------------------------------------------------------
 class InstagramWebhookDistributor(BaseDistributor):
@@ -1862,7 +2062,8 @@ class InstagramWebhookDistributor(BaseDistributor):
         if not self._is_instagram_message(message):
             return None
 
-        if message.get("action") not in {"tweet", "photo", "description"}:
+        action = message.get("action")
+        if action not in {"tweet", "photo", "description"}:
             return None
 
         author = message.get("author") or {}
@@ -1870,11 +2071,6 @@ class InstagramWebhookDistributor(BaseDistributor):
         if not username:
             return None
         if self.handles and username not in self.handles:
-            return None
-
-        # 头像/简介变更先保留转换入口；当前 GMGN Instagram 样例只覆盖新帖/Story。
-        if message.get("action") in {"photo", "description"}:
-            logger.debug(f"📸 Instagram Webhook 暂不推送资料变更事件: @{username} {message.get('action')}")
             return None
 
         raw_id = str(
@@ -1906,6 +2102,27 @@ class InstagramWebhookDistributor(BaseDistributor):
         avatar_url = author.get("avatar") or ""
         cover_url = self._pick_cover_url(media)
         identity_suffix = str(message.get("_instagram_identity_fingerprint") or "")[:8]
+        content_text = content.get("text") or ""
+
+        avatar_change = message.get("avatar_change") or {}
+        bio_change = message.get("bio_change") or {}
+        change_before = ""
+        change_after = ""
+
+        if action == "photo":
+            change_before = avatar_change.get("before") or ""
+            change_after = avatar_change.get("after") or ""
+            avatar_url = change_after or avatar_url
+            cover_url = change_after or cover_url or avatar_url
+            shortcode = f"profile_photo_{raw_id}"
+            post_url = f"https://www.instagram.com/{username}/"
+        elif action == "description":
+            change_before = bio_change.get("before") or ""
+            change_after = bio_change.get("after") or ""
+            content_text = content_text or change_after
+            cover_url = cover_url or avatar_url
+            shortcode = f"profile_description_{raw_id}"
+            post_url = f"https://www.instagram.com/{username}/"
 
         if message.get("_instagram_identity_collided") and identity_suffix:
             shortcode = f"{shortcode}_{identity_suffix}"
@@ -1914,7 +2131,7 @@ class InstagramWebhookDistributor(BaseDistributor):
             "username": username,
             "note": note,
             "shortcode": shortcode,
-            "content": content.get("text") or "",
+            "content": content_text,
             "cover_url": cover_url,
             "avatar_url": avatar_url,
             "taken_at": timestamp,
@@ -1928,6 +2145,10 @@ class InstagramWebhookDistributor(BaseDistributor):
             "link": post_url,
             "user": user_display,
             "type": "instagram",
+            "action": action,
+            "event": action,
+            "change_before": change_before,
+            "change_after": change_after,
             "display_name": user_display,
         }
 

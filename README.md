@@ -156,8 +156,13 @@ python3 ctl.py restart
 | `TG_TRACK_FILTER_<GROUP>` | ❌ | TG 分组赛道过滤关键词（逗号分隔），如 `A股`；配置后仅推送 AI 赛道命中的内容 |
 | `FEISHU_TRACK_FILTER_<GROUP>` | ❌ | 飞书分组赛道过滤关键词（逗号分隔），如 `A股`；配置后仅推送 AI 赛道命中的内容 |
 | `TG_FILTER_HANDLES` | ❌ | 附加白名单（一般留空，路由分组的 Handle 会自动合并） |
-| `BINANCE_SQUARE_HANDLES` | ❌ | 币安广场等非 Twitter 账号的 ID 列表（逗号分隔），由于 FxTwitter 无法解析，会自动提取原图渲染为大图 |
+| `BINANCE_SQUARE_HANDLES` | ❌ | 币安广场等非 Twitter 账号的 ID 列表（逗号分隔），用于 TG 特殊预览与币安聚合端推送，默认 `cz,heyi,richardteng` |
+| `BINANCE_SQUARE_WEBHOOK_URL` | ❌ | 币安广场专用聚合端接收地址；兼容上级币安项目的 `/internal/receive_newsflash` 协议，留空则禁用 |
+| `BINANCE_SQUARE_WEBHOOK_KEY` | ❌ | 币安广场专用聚合端 `X-Worker-Token`；未配置时可复用 `INTERNAL_NEWS_RECEIVER_KEY` |
+| `BINANCE_SQUARE_WEBHOOK_CATEGORY` | ❌ | 推送到币安聚合端的二级栏目，默认 `币安最新动态` |
+| `BINANCE_SQUARE_WEBHOOK_NOTES` | ❌ | 币安广场账号备注映射，如 `cz:CZ,heyi:Yi He,richardteng:Richard Teng` |
 | `DEEPSEEK_API_KEY` | ❌ | DeepSeek API Key，留空则跳过翻译 |
+| `DEEPSEEK_MODEL` | ❌ | DeepSeek 模型，默认 `deepseek-v4-flash`；需要更强分析可改为 `deepseek-v4-pro` |
 | `AI_ANALYZE_HANDLES`| ❌ | 启用深度 AI 分析（赛道分类、摘要、A股提取）的 Handle 列表（逗号分隔） |
 | `SUMMARY_ENABLE` | ❌ | 定时频道总结开关（`True`/`False`），默认 `False` |
 | `SUMMARY_TIMES` | ❌ | 每日总结时间，逗号分隔，如 `07:30,20:00` |
@@ -169,8 +174,8 @@ python3 ctl.py restart
 | `WEBHOOK_SECRET` | ❌ | HMAC-SHA256 签名密钥 |
 | `INSTAGRAM_WEBHOOK_URL` | ❌ | Instagram 专用 Webhook 地址，按 InsClawer 兼容格式推送，留空则禁用 |
 | `INSTAGRAM_WEBHOOK_API_KEY` | ❌ | Instagram Webhook 的 `X-API-Key` 请求头 |
-| `INSTAGRAM_WEBHOOK_HANDLES` | ❌ | 需要推送的 Instagram 用户名列表，默认 `binance,binance.zh` |
-| `INSTAGRAM_WEBHOOK_NOTES` | ❌ | Instagram 用户备注映射，如 `binance:币安官方,binance.zh:币安中文` |
+| `INSTAGRAM_WEBHOOK_HANDLES` | ❌ | 需要推送的 Instagram 用户名列表，默认 `binance,binance.zh,kabosumama,whitehouse,realdonaldtrump,openai,donaldjtrumpjr,chatgpt,erictrump,knowyourmeme,ivankatrump` |
+| `INSTAGRAM_WEBHOOK_NOTES` | ❌ | Instagram 用户备注映射，如 `binance:币安官方,binance.zh:币安中文,openai:OpenAI` |
 | `INSTAGRAM_TRANSLATION_ENABLE` | ❌ | 是否允许项目内对 Instagram 内容做翻译/AI 分析，默认 `False`；专用 Instagram Webhook 始终推送原文 |
 
 #### 多频道路由分组规则
@@ -218,8 +223,19 @@ SUMMARY_TWEET_TEXT_LIMIT=500
 
 #### 非推特账号特殊处理 (如币安广场)
 
-对于非推特源的账号（如币安广场的 `cz`、`heyi`），由于它们不是真实的推特用户名，依赖推特链接（`fxtwitter.com`）解析图片会失败。
-你可以在 `.env` 中配置 `BINANCE_SQUARE_HANDLES=cz,heyi`。当系统检测到这些账号时，会跳过推特链接拼接，直接从数据源的 JSON 中抽取真实的图片直链（Raw Image URL）交给 Telegram 渲染。这样既保证了能看到大图预览，又维持了 4096 的文本容量。
+对于非推特源的账号（如币安广场的 `cz`、`heyi`、`richardteng`），由于它们不是真实的推特用户名，依赖推特链接（`fxtwitter.com`）解析图片会失败。
+你可以在 `.env` 中配置 `BINANCE_SQUARE_HANDLES=cz,heyi,richardteng`。当系统检测到这些账号时，会跳过推特链接拼接，直接从数据源的 JSON 中抽取真实的图片直链（Raw Image URL）交给 Telegram 渲染。这样既保证了能看到大图预览，又维持了 4096 的文本容量。
+
+如果还要同步到网页聚合端，配置币安广场专用 Webhook：
+
+```bash
+BINANCE_SQUARE_WEBHOOK_URL=http://127.0.0.1:10077/internal/receive_newsflash
+BINANCE_SQUARE_WEBHOOK_KEY=your-internal-news-receiver-key
+BINANCE_SQUARE_WEBHOOK_CATEGORY=币安最新动态
+BINANCE_SQUARE_WEBHOOK_NOTES=cz:CZ,heyi:Yi He,richardteng:Richard Teng
+```
+
+该分发器复用上级 `binance_monitor_global` 的聚合端协议：请求头使用 `X-Worker-Token`，payload 使用 `source: "binance"`，并将 `tags` 设为 `币安最新动态 / 币安广场 / 账号备注`，因此会落到币安栏目。
 
 ### 飞书群组配置与避坑指南
 

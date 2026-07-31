@@ -121,9 +121,31 @@ if _routing_handles:
 # ---------- Binance Square 配置 ----------
 BINANCE_SQUARE_HANDLES = [
     h.strip().lower()
-    for h in os.getenv("BINANCE_SQUARE_HANDLES", "").split(",")
+    for h in os.getenv("BINANCE_SQUARE_HANDLES", "cz,heyi,richardteng").split(",")
     if h.strip()
 ]
+BINANCE_SQUARE_WEBHOOK_URL = (
+    os.getenv("BINANCE_SQUARE_WEBHOOK_URL")
+    or os.getenv("INTERNAL_NEWS_RECEIVER_URL", "")
+)
+BINANCE_SQUARE_WEBHOOK_KEY = (
+    os.getenv("BINANCE_SQUARE_WEBHOOK_KEY")
+    or os.getenv("INTERNAL_NEWS_RECEIVER_KEY", "")
+)
+BINANCE_SQUARE_WEBHOOK_CATEGORY = os.getenv("BINANCE_SQUARE_WEBHOOK_CATEGORY", "币安最新动态")
+BINANCE_SQUARE_WEBHOOK_LANG = os.getenv("BINANCE_SQUARE_WEBHOOK_LANG", "zh-CN")
+BINANCE_SQUARE_WEBHOOK_NOTES: dict[str, str] = {}
+for item in os.getenv(
+    "BINANCE_SQUARE_WEBHOOK_NOTES",
+    "cz:CZ,heyi:Yi He,richardteng:Richard Teng",
+).split(","):
+    if ":" not in item:
+        continue
+    handle, note = item.split(":", 1)
+    handle = handle.strip().lower()
+    note = note.strip()
+    if handle:
+        BINANCE_SQUARE_WEBHOOK_NOTES[handle] = note
 
 # ---------- 飞书推送配置 ----------
 FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
@@ -141,7 +163,10 @@ INSTAGRAM_WEBHOOK_URL = os.getenv("INSTAGRAM_WEBHOOK_URL", "")
 INSTAGRAM_WEBHOOK_API_KEY = os.getenv("INSTAGRAM_WEBHOOK_API_KEY", "")
 INSTAGRAM_WEBHOOK_HANDLES = [
     h.strip().lower()
-    for h in os.getenv("INSTAGRAM_WEBHOOK_HANDLES", "binance,binance.zh").split(",")
+    for h in os.getenv(
+        "INSTAGRAM_WEBHOOK_HANDLES",
+        "binance,binance.zh,kabosumama,whitehouse,realdonaldtrump,openai,donaldjtrumpjr,chatgpt,erictrump,knowyourmeme,ivankatrump",
+    ).split(",")
     if h.strip()
 ]
 INSTAGRAM_WEBHOOK_NOTES: dict[str, str] = {}
@@ -158,7 +183,7 @@ INSTAGRAM_TRANSLATION_ENABLE = os.getenv("INSTAGRAM_TRANSLATION_ENABLE", "False"
 # ---------- DeepSeek 翻译配置 ----------
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 # ---------- AI 分析（赛道分类 + 摘要 + 翻译）----------
 AI_ANALYZE_HANDLES: set[str] = {

@@ -1,4 +1,5 @@
 import json
+import re
 from contextlib import suppress
 
 from playwright.async_api import BrowserContext, Page, Playwright
@@ -145,6 +146,169 @@ class BrowserManager:
     async def save_screenshot(self):
         await self.page.screenshot(path=config.SCREENSHOT_PATH)
         logger.info(f"界面已准备完毕，运行截图已保存: {config.SCREENSHOT_PATH}")
+
+    async def resolve_visible_reference(self, raw_item: dict) -> dict | None:
+        """从 GMGN 页面里为缺失 cp=1 的快照消息兜底提取引用卡片。
+
+        GMGN 偶尔只通过 WS 下发快照版 reply/quote，但页面已经渲染出完整引用卡片。
+        这里扫描当前可见卡片，补出 su/sc，供下游沿用现有 reference 展示逻辑。
+        """
+        if not self.page or not raw_item:
+            return None
+
+        content = raw_item.get("c") if isinstance(raw_item.get("c"), dict) else {}
+        author = raw_item.get("u") if isinstance(raw_item.get("u"), dict) else {}
+        query = {
+            "handle": author.get("s") or "",
+            "text": content.get("t") or "",
+            "tweetId": raw_item.get("ti") or "",
+            "authorAvatar": author.get("a") or "",
+        }
+
+        try:
+            result = await self.page.evaluate(
+                """
+({ handle, text, tweetId, authorAvatar }) => {
+  const clean = (value) => String(value || "")
+    .replace(/\\s+/g, " ")
+    .trim();
+  const isVisible = (element) => {
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      rect.width > 80 &&
+      rect.height > 40 &&
+      rect.bottom >= 0 &&
+      rect.right >= 0 &&
+      rect.top <= window.innerHeight &&
+      rect.left <= window.innerWidth;
+  };
+  const avatarFile = (url) => {
+    try {
+      return new URL(url).pathname.split("/").pop() || "";
+    } catch (_) {
+      return "";
+    }
+  };
+  const avatarNeedle = avatarFile(authorAvatar);
+  const normalizeMediaUrl = (url) => {
+    if (!url) return "";
+    try {
+      const parsed = new URL(url, window.location.href);
+      const encoded = parsed.searchParams.get("url");
+      if (encoded) return decodeURIComponent(encoded);
+      return parsed.href;
+    } catch (_) {
+      return String(url);
+    }
+  };
+  const parseHandleLine = (line) => {
+    const match = line.match(/^(.+?)\\s+@([A-Za-z0-9_]{1,20})(?:\\s|$)/);
+    if (!match) return null;
+    return { name: clean(match[1]), handle: match[2] };
+  };
+  const scoreCandidate = (element) => {
+    const bodyText = clean(element.innerText);
+    if (!bodyText.includes("@" + handle)) return 0;
+    if (text && !bodyText.includes(clean(text))) return 0;
+    let score = 1;
+    if (tweetId && bodyText.includes(tweetId)) score += 2;
+    if (avatarNeedle && Array.from(element.querySelectorAll("img")).some((img) => (img.src || "").includes(avatarNeedle))) score += 4;
+    const rect = element.getBoundingClientRect();
+    if (rect.height < 900) score += 2;
+    if (rect.height < 500) score += 1;
+    score -= Math.max(0, bodyText.length - 2500) / 1000;
+    return score;
+  };
+
+	  const candidates = Array.from(document.querySelectorAll("article, [role='article'], div"))
+	    .filter(isVisible)
+	    .map((element) => ({ element, score: scoreCandidate(element) }))
+	    .filter((item) => item.score > 0)
+	    .sort((a, b) => b.score - a.score);
+	  const extractFromRoot = (root) => {
+	    const lines = String(root.innerText || "").split(/\\n+/).map(clean).filter(Boolean);
+	    const mainHandleIndex = lines.findIndex((line) => line.includes("@" + handle));
+	    const refLineIndex = lines.findIndex((line, index) => {
+	      if (index <= mainHandleIndex) return false;
+	      const parsed = parseHandleLine(line);
+	      return parsed && parsed.handle.toLowerCase() !== String(handle).toLowerCase();
+	    });
+	    if (refLineIndex === -1) return null;
+
+	    const refAuthor = parseHandleLine(lines[refLineIndex]);
+	    if (!refAuthor) return null;
+
+	    const stopPatterns = [
+	      /^\\d{4}-\\d{2}-\\d{2}/,
+	      /^耗时[:：]/,
+	      /^BASIC\\b/i,
+	      /^SKIP\\b/i,
+	      /^狙击决策轨迹/,
+	      /^接收推特信号/,
+	      /^策略匹配/,
+	      /^白名单库检索/,
+	      /^检查决策/
+	    ];
+	    const refTextLines = [];
+	    for (let index = refLineIndex + 1; index < lines.length; index += 1) {
+	      const line = lines[index];
+	      if (stopPatterns.some((pattern) => pattern.test(line))) break;
+	      if (parseHandleLine(line) && refTextLines.length > 0) break;
+	      if (line === text || line === "回复" || line === "引用") continue;
+	      refTextLines.push(line);
+	    }
+
+	    const refText = refTextLines.join("\\n").trim();
+	    if (!refText) return null;
+
+	    const media = [];
+	    for (const img of Array.from(root.querySelectorAll("img"))) {
+	      const src = normalizeMediaUrl(img.currentSrc || img.src);
+	      if (!src || (avatarNeedle && src.includes(avatarNeedle))) continue;
+	      if (/profile_images\\//.test(src)) continue;
+	      if (!/(pbs\\.twimg\\.com|twimg\\.com|gmgn|binance|static)/i.test(src)) continue;
+	      media.push({ t: "image", u: src });
+	    }
+
+	    return {
+	      si: "",
+	      su: { s: refAuthor.handle, n: refAuthor.name },
+	      sc: { t: refText, m: media.slice(0, 4) }
+	    };
+	  };
+
+	  for (const candidate of candidates.slice(0, 20)) {
+	    const extracted = extractFromRoot(candidate.element);
+	    if (extracted) return extracted;
+	  }
+	  return null;
+	}
+                """,
+                query,
+            )
+        except Exception as exc:
+            logger.debug(f"DOM 引用兜底解析失败: {exc}")
+            return None
+
+        if not isinstance(result, dict):
+            return None
+
+        sc = result.get("sc") if isinstance(result.get("sc"), dict) else {}
+        su = result.get("su") if isinstance(result.get("su"), dict) else {}
+        ref_text = sc.get("t") or ""
+        ref_handle = su.get("s") or ""
+        if not ref_text or not ref_handle:
+            return None
+
+        ref_text = re.sub(r"\s+\n", "\n", ref_text).strip()
+        logger.info(
+            f"🧩 DOM 引用兜底命中: @{author.get('s') or '?'} -> @{ref_handle} "
+            f"ref_len={len(ref_text)} tweet_id={raw_item.get('ti') or ''}"
+        )
+        result["sc"]["t"] = ref_text
+        return result
 
     async def recover_after_timeout(self, force_goto: bool = False):
         if force_goto:

@@ -23,6 +23,7 @@ except ImportError:
 from . import config
 from .browser import BrowserManager
 from .distributor import (
+    BinanceSquareWebhookDistributor,
     DistributorHub,
     LoggingDistributor,
     TelegramDistributor,
@@ -52,8 +53,9 @@ class MessageDeduplicator:
     TIMEOUT_FEISHU = 0.8  # 800ms 等待完整版
     TIMEOUT_UPDATE = 5.0  # 5s 等待 TG 的完整版更新
 
-    def __init__(self, publish_callback):
+    def __init__(self, publish_callback, reference_resolver=None):
         self._publish = publish_callback
+        self._reference_resolver = reference_resolver
         self._pending_feishu: dict[str, tuple[dict, asyncio.TimerHandle]] = {}
         self._pending_update: dict[str, tuple[dict, asyncio.TimerHandle]] = {}
         self._processed_feishu_ids: set[str] = set()
@@ -266,13 +268,54 @@ class MessageDeduplicator:
             logger.warning(f"⏱️ 默认渠道等待完整版超时: {internal_id[:20]}... 使用快照兜底推送")
             self._processed_feishu_ids.add(internal_id)
             self._mark_history(internal_id)
-            self._dispatch(raw_item, target="DEFAULT")
+            self._schedule_timeout_dispatch(raw_item, target="DEFAULT")
 
     def _timeout_update(self, internal_id: str) -> None:
         if internal_id in self._pending_update:
             raw_item, _ = self._pending_update.pop(internal_id)
-            logger.info(f"⏱️ TG等待完整版更新超时(5s): {internal_id[:20]}... 使用快照更新TG")
-            self._dispatch(raw_item, target="TG_UPDATE")
+            logger.info(f"⏱️ TG等待完整版更新超时(5s): {internal_id[:20]}... 尝试引用兜底后更新TG")
+            self._schedule_timeout_dispatch(raw_item, target="TG_UPDATE")
+
+    def _schedule_timeout_dispatch(self, raw_item: dict, target: str) -> None:
+        task = asyncio.create_task(self._dispatch_timeout_item(raw_item, target))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _dispatch_timeout_item(self, raw_item: dict, target: str) -> None:
+        enriched_item = await self._enrich_reference_from_page(raw_item, target)
+        self._dispatch(enriched_item, target=target)
+
+    async def _enrich_reference_from_page(self, raw_item: dict, target: str) -> dict:
+        if not self._reference_resolver:
+            return raw_item
+        if raw_item.get("su") or raw_item.get("sc"):
+            return raw_item
+        if raw_item.get("tw") not in {"reply", "quote", "repost"}:
+            return raw_item
+
+        try:
+            patch = await self._reference_resolver(raw_item)
+        except Exception as exc:
+            logger.debug(f"DOM 引用兜底异常，使用快照继续: {exc}")
+            return raw_item
+
+        if not isinstance(patch, dict):
+            return raw_item
+        su = patch.get("su") if isinstance(patch.get("su"), dict) else {}
+        sc = patch.get("sc") if isinstance(patch.get("sc"), dict) else {}
+        if not su.get("s") or not sc.get("t"):
+            return raw_item
+
+        enriched = dict(raw_item)
+        enriched.setdefault("si", patch.get("si") or "")
+        enriched["su"] = su
+        enriched["sc"] = sc
+        logger.info(
+            f"🧩 {target} 使用 DOM 引用兜底: "
+            f"@{(raw_item.get('u') or {}).get('s') or '?'} -> @{su.get('s')} "
+            f"ref_len={len(sc.get('t') or '')}"
+        )
+        return enriched
 
     def _dispatch(self, raw_item: dict, target: str) -> None:
         """标准化并推送消息。"""
@@ -556,7 +599,16 @@ def _build_distributor_hub(storage: SQLiteStorage | None = None) -> DistributorH
             url=config.WEBHOOK_URL,
             secret=config.WEBHOOK_SECRET,
         ),
-        # 5. Instagram 专用 Webhook（InsClawer 兼容格式）
+        # 5. Binance Square 专用 Webhook（币安聚合端 newsflash 格式）
+        BinanceSquareWebhookDistributor(
+            url=config.BINANCE_SQUARE_WEBHOOK_URL,
+            worker_token=config.BINANCE_SQUARE_WEBHOOK_KEY,
+            handles=config.BINANCE_SQUARE_HANDLES,
+            notes=config.BINANCE_SQUARE_WEBHOOK_NOTES,
+            category=config.BINANCE_SQUARE_WEBHOOK_CATEGORY,
+            lang=config.BINANCE_SQUARE_WEBHOOK_LANG,
+        ),
+        # 6. Instagram 专用 Webhook（InsClawer 兼容格式）
         InstagramWebhookDistributor(
             url=config.INSTAGRAM_WEBHOOK_URL,
             api_key=config.INSTAGRAM_WEBHOOK_API_KEY,
@@ -609,7 +661,7 @@ async def main():
     storage = SQLiteStorage(config.SUMMARY_DB_PATH)
     hub = _build_distributor_hub(storage)
     summary_scheduler = DailySummaryScheduler(storage, hub)
-    deduplicator = MessageDeduplicator(hub.publish)
+    deduplicator = MessageDeduplicator(hub.publish, browser.resolve_visible_reference)
     connected_ws = set()
     watchdog_timeout_count = 0
     ignored_ws_log_count = 0
