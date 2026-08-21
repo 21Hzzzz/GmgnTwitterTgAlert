@@ -233,6 +233,18 @@ class TelegramDistributor(BaseDistributor):
         return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     @staticmethod
+    def _normalize_summary_html(text: str) -> str:
+        """将模型常见的换行标签转换为 Telegram HTML 支持的换行。"""
+        text = re.sub(r"<br\b[^>]*?/?>", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(r"</?p\b[^>]*>", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(r"</?div\b[^>]*>", "\n", text, flags=re.IGNORECASE)
+        text = re.sub(r"<strong\b[^>]*>", "<b>", text, flags=re.IGNORECASE)
+        text = re.sub(r"</strong\s*>", "</b>", text, flags=re.IGNORECASE)
+        text = re.sub(r"<em\b[^>]*>", "<i>", text, flags=re.IGNORECASE)
+        text = re.sub(r"</em\s*>", "</i>", text, flags=re.IGNORECASE)
+        return text
+
+    @staticmethod
     def _wrap_blockquote(content: str, raw_text_len: int, threshold: int = 128) -> str:
         """根据原始文本长度决定是否使用可折叠 blockquote。
 
@@ -573,7 +585,7 @@ class TelegramDistributor(BaseDistributor):
         if not self._session or not target_channel_id or not text:
             return False
 
-        text_to_send = text
+        text_to_send = self._normalize_summary_html(text)
         if len(text_to_send) > 3900:
             text_to_send = text_to_send[:3850] + "\n\n[摘要过长，TG 内容已截断，请查看飞书完整版]"
 

@@ -48,7 +48,7 @@ async def summarize_channel_tweets(
         "请生成一条适合 Telegram 频道推送的 HTML 摘要，要求：\n"
         "1. 必须只输出 Telegram Bot API 支持的 HTML，不要输出 Markdown、代码块或解释。\n"
         "2. 总长度尽量控制在 1200 字以内，重点明确、不要嘈杂。\n"
-        "3. 标题格式：<b>🧾 {频道名} 频道摘要</b>，下一行用 <i>时间窗口 · 共N条推文</i>。\n"
+        f"3. 标题格式：<b>🧾 {label} 频道摘要</b>，下一行用 <i>时间窗口 · 共N条推文</i>。\n"
         "4. 用 3 条以内核心要点，每条以 emoji 开头，关键词用 <b>重点</b>。\n"
         "5. 用一个 <blockquote expandable> 折叠块承载细节，块内最多写 3 个小标题："
         "🔎 事件、📊 市场含义、🔗 回看。\n"
@@ -74,7 +74,7 @@ async def summarize_channel_tweets(
         "max_tokens": 1500,
     }
 
-    max_retries = 2
+    max_retries = 3
     for attempt in range(1, max_retries + 1):
         try:
             timeout = aiohttp.ClientTimeout(total=config.SUMMARY_AI_TIMEOUT_SECONDS)
@@ -97,7 +97,25 @@ async def summarize_channel_tweets(
                         return None
 
                     data = await resp.json()
-                    return data["choices"][0]["message"]["content"].strip()
+                    choices = data.get("choices") or []
+                    message = choices[0].get("message") if choices else {}
+                    content = message.get("content") if isinstance(message, dict) else None
+                    if isinstance(content, str) and content.strip():
+                        return content.strip()
+
+                    finish_reason = choices[0].get("finish_reason") if choices else None
+                    reasoning_content = (
+                        message.get("reasoning_content")
+                        if isinstance(message, dict)
+                        else None
+                    )
+                    usage = data.get("usage") or {}
+                    logger.warning(
+                        "🧾 DeepSeek 频道总结返回空正文 "
+                        f"(第 {attempt}/{max_retries} 次, finish_reason={finish_reason}, "
+                        f"reasoning_len={len(reasoning_content or '')}, "
+                        f"completion_tokens={usage.get('completion_tokens')})"
+                    )
         except asyncio.TimeoutError:
             logger.warning(f"🧾 DeepSeek 频道总结超时 (第 {attempt} 次尝试)")
         except aiohttp.ClientError as e:
@@ -107,7 +125,7 @@ async def summarize_channel_tweets(
             return None
 
         if attempt < max_retries:
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
 
     return None
 

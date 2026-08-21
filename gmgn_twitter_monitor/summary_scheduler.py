@@ -20,6 +20,7 @@ class DailySummaryScheduler:
         self.storage = storage
         self.hub = hub
         self._task: asyncio.Task | None = None
+        self._run_tasks: set[asyncio.Task] = set()
         self._tz = self._load_timezone()
 
     async def start(self) -> None:
@@ -41,13 +42,19 @@ class DailySummaryScheduler:
         )
 
     async def stop(self) -> None:
-        if not self._task:
-            return
-        self._task.cancel()
-        try:
-            await self._task
-        except asyncio.CancelledError:
-            pass
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+        run_tasks = list(self._run_tasks)
+        for task in run_tasks:
+            task.cancel()
+        if run_tasks:
+            await asyncio.gather(*run_tasks, return_exceptions=True)
         logger.info("🧾 定时频道总结已关闭")
 
     async def _run_loop(self) -> None:
@@ -59,11 +66,30 @@ class DailySummaryScheduler:
             await asyncio.sleep(wait_seconds)
 
             window_start, window_end = self._window_for_run(run_at)
-            for summary_conf in config.SUMMARY_CHANNELS:
-                try:
-                    await self._run_summary(summary_conf, window_start, window_end)
-                except Exception as e:
-                    logger.error(f"🧾 频道总结任务异常 ({summary_conf.get('key')}): {e}")
+            task = asyncio.create_task(
+                self._run_summaries(window_start, window_end),
+                name=f"summary-{run_at.isoformat()}",
+            )
+            self._run_tasks.add(task)
+            task.add_done_callback(self._on_run_task_done)
+
+    async def _run_summaries(self, window_start: datetime, window_end: datetime) -> None:
+        for summary_conf in config.SUMMARY_CHANNELS:
+            try:
+                await self._run_summary(summary_conf, window_start, window_end)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"🧾 频道总结任务异常 ({summary_conf.get('key')}): {e}")
+
+    def _on_run_task_done(self, task: asyncio.Task) -> None:
+        self._run_tasks.discard(task)
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception as e:
+            logger.error(f"🧾 定时频道总结后台任务异常: {e}")
 
     async def _run_summary(self, summary_conf: dict, start_dt: datetime, end_dt: datetime) -> None:
         summary_key = summary_conf["key"]
@@ -135,6 +161,10 @@ class DailySummaryScheduler:
                 tg_sent=existing_tg_sent,
                 feishu_sent=existing_feishu_sent,
                 error="AI summary returned empty",
+            )
+            logger.error(
+                f"🧾 频道总结失败: {summary_key} "
+                f"{start_dt} -> {end_dt}; AI 返回空正文"
             )
             return
 
