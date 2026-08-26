@@ -6,7 +6,7 @@
 
 - **全动作捕获**：覆盖发推、转推、回复、引用、关注/取关、删帖、换头像、换横幅、改昵称、改简介、置顶/取消置顶共 13 种推特行为
 - **智能图文预览**：纯图推文优先使用原图直链确保 100% 准确预览，含视频推文通过 FxTwitter 实现内嵌播放，关注/取关等主页类动作通过 vxTwitter 渲染为用户名片
-- **DeepSeek 实时翻译与 AI 分析**：非阻塞异步翻译，推送完成后自动追加中文译文。支持对指定博主进行投资赛道分析（如 A 股股票名称代码提取）与智能摘要
+- **免费机器翻译 + DeepSeek AI 分析**：普通推文走 Google → Microsoft → 腾讯交互翻译（无需 Key），推送完成后自动追加中文译文；指定博主（如白毛股神）仍走 DeepSeek 做赛道分析、摘要与翻译
 - **多频道智能路由**：按推特 Handle 分组路由到不同 Telegram 频道，同一博主可同时推送至多个频道
 - **双轨数据捕获**：WebSocket 实时监听 + HTTP Polling 降级拦截，重连间隙零丢失
 - **去重引擎**：基于 `internal_id` 的快照/完整版智能去重，0.8s (飞书) ~ 5s (TG) 窗口内自动选优
@@ -41,7 +41,7 @@ GmgnTwitterClaw/
 │   ├── logging_setup.py           # loguru 日志格式化
 │   ├── models.py                  # StandardizedMessage 数据模型（dataclass）
 │   ├── parser.py                  # 原始 WS 数据 → 标准化 JSON 转换器
-│   ├── translator.py              # DeepSeek 异步翻译引擎（纯翻译链路）
+│   ├── translator.py              # 免费机器翻译（Google → Microsoft → 腾讯交互翻译）
 │   └── watchdog.py                # 看门狗：超时无数据自动刷新页面
 ├── gmgn_twitter_monitor.py        # 兼容入口（等价于 python -m gmgn_twitter_monitor）
 ├── ctl.py                         # 交互式运维控制台（服务管理/日志查看/截图等）
@@ -161,9 +161,10 @@ python3 ctl.py restart
 | `BINANCE_SQUARE_WEBHOOK_KEY` | ❌ | 币安广场专用聚合端 `X-Worker-Token`；未配置时可复用 `INTERNAL_NEWS_RECEIVER_KEY` |
 | `BINANCE_SQUARE_WEBHOOK_CATEGORY` | ❌ | 推送到币安聚合端的二级栏目，默认 `币安最新动态` |
 | `BINANCE_SQUARE_WEBHOOK_NOTES` | ❌ | 币安广场账号备注映射，如 `cz:CZ,heyi:Yi He,richardteng:Richard Teng` |
-| `DEEPSEEK_API_KEY` | ❌ | DeepSeek API Key，留空则跳过翻译 |
+| `TRANSLATE_PROVIDERS` | ❌ | 普通推文直译顺序，默认 `google,microsoft,transmart`，无需 API Key |
+| `DEEPSEEK_API_KEY` | ❌ | DeepSeek API Key，仅 AI 分析账号和定时频道总结使用；留空则跳过 AI |
 | `DEEPSEEK_MODEL` | ❌ | DeepSeek 模型，默认 `deepseek-v4-flash`；需要更强分析可改为 `deepseek-v4-pro` |
-| `AI_ANALYZE_HANDLES`| ❌ | 启用深度 AI 分析（赛道分类、摘要、A股提取）的 Handle 列表（逗号分隔） |
+| `AI_ANALYZE_HANDLES`| ❌ | 启用深度 AI 分析（赛道分类、摘要、A股提取 + 翻译）的 Handle 列表（逗号分隔） |
 | `SUMMARY_ENABLE` | ❌ | 定时频道总结开关（`True`/`False`），默认 `False` |
 | `SUMMARY_TIMES` | ❌ | 每日总结时间，逗号分隔，如 `07:30,20:00` |
 | `SUMMARY_GROUPS` | ❌ | 要总结的路由分组后缀，如 `BINANCE`；默认读取该组 TG 频道作为数据源 |
@@ -172,8 +173,9 @@ python3 ctl.py restart
 | `SUMMARY_TWEET_TEXT_LIMIT` | ❌ | 每条推文喂给总结 AI 的正文+关联原文总长度限制，默认 `500` 字 |
 | `WEBHOOK_URL` | ❌ | Webhook 推送目标 URL，留空则禁用 |
 | `WEBHOOK_SECRET` | ❌ | HMAC-SHA256 签名密钥 |
-| `INSTAGRAM_WEBHOOK_URL` | ❌ | Instagram 专用 Webhook 地址，按 InsClawer 兼容格式推送，留空则禁用 |
-| `INSTAGRAM_WEBHOOK_API_KEY` | ❌ | Instagram Webhook 的 `X-API-Key` 请求头 |
+| `INSTAGRAM_WEBHOOK_URL` | ❌ | Instagram 社媒卡片聚合端地址，通常为 `/internal/receive_instagram`，留空则禁用 |
+| `INSTAGRAM_WEBHOOK_WORKER_TOKEN` | ❌ | Instagram 聚合端 `X-Worker-Token`；未配置时可回退到 `INTERNAL_NEWS_RECEIVER_KEY` |
+| `INSTAGRAM_WEBHOOK_VERIFY_SSL` | ❌ | 是否校验聚合端 HTTPS 证书；`direct.tech-melon.top` 使用内部 Origin CA 时设为 `False` |
 | `INSTAGRAM_WEBHOOK_HANDLES` | ❌ | 需要推送的 Instagram 用户名列表，默认 `binance,binance.zh,kabosumama,whitehouse,realdonaldtrump,openai,donaldjtrumpjr,chatgpt,erictrump,knowyourmeme,ivankatrump` |
 | `INSTAGRAM_WEBHOOK_NOTES` | ❌ | Instagram 用户备注映射，如 `binance:币安官方,binance.zh:币安中文,openai:OpenAI` |
 | `INSTAGRAM_TRANSLATION_ENABLE` | ❌ | 是否允许项目内对 Instagram 内容做翻译/AI 分析，默认 `False`；专用 Instagram Webhook 始终推送原文 |
@@ -252,7 +254,7 @@ BINANCE_SQUARE_WEBHOOK_NOTES=cz:CZ,heyi:Yi He,richardteng:Richard Teng
 **避坑：原生大图与服务器网络配置**
 为了弥补飞书不支持直接渲染外部图片链接的缺陷，本系统在底层设计了独特的**双线程并发机制**：
 1. **借尸还魂**：利用 `.env` 中的 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`（该应用需在飞书开发者后台开通 `im:resource:upload` 获取与上传图片或文件权限并发布新版本），将 Twitter 的外网原图（包括视频的封面）极速下载并以应用的身份上传给飞书，获取合法内网 `img_key`。
-2. **瞒天过海**：与此同时，并发调用 DeepSeek 获取中文翻译。当两路异步任务瞬间完成后，系统会将带有内网图片的精美卡片，依然使用能穿透禁言的 Webhook 机器人发送。
+2. **瞒天过海**：与此同时，并发调用免费机器翻译（AI 分析账号则走 DeepSeek）获取中文翻译。当两路异步任务完成后，系统会将带有内网图片的精美卡片，依然使用能穿透禁言的 Webhook 机器人发送。
 
 > **⚠️ 网络代理避坑警告 (非常重要)**: 
 > 飞书上传大图的前提是：系统能够成功下载推特的原图（pbs.twimg.com）。
@@ -351,8 +353,8 @@ sudo nginx -t && sudo systemctl reload nginx
 │        │ │ 路由  │ │        │ │         │
 └────────┘ └──┬────┘ └────────┘ └─────────┘
               │
-        DeepSeek 异步翻译
-       (推送后追加译文)
+        Google/微软异步翻译
+       (推送后追加译文；AI 账号走 DeepSeek)
 ```
 
 ### Telegram 推送特性
@@ -361,7 +363,7 @@ sudo nginx -t && sudo systemctl reload nginx
 - **vxTwitter 主页名片**：关注、取关、改昵称、改简介等动作自动通过 `vxtwitter.com` 渲染为用户头像+简介的名片卡
 - **原帖直达链接**：卡片底部统一附带 `x.com` 原帖/主页链接，支持点击直达
 - **换头像对比图**：头像变更动作保留原生 `sendMediaGroup`，展示新旧头像的并列对比
-- **DeepSeek 实时翻译与深度分析**：推文发送后异步调用 DeepSeek API 翻译。对指定的博主额外进行投资赛道分析、智能摘要及 A 股个股提取，完成后自动编辑原消息追加分析与译文，主推送流程零阻塞
+- **免费机器翻译与 DeepSeek 深度分析**：普通推文发送后异步走 Google → Microsoft → 腾讯交互翻译。对 `AI_ANALYZE_HANDLES` 中的博主（如白毛股神）额外进行投资赛道分析、智能摘要及 A 股个股提取，完成后自动编辑原消息追加分析与译文，主推送流程零阻塞
 - **429 退避重试**：遇到 Telegram Rate Limit 时自动等待并重试
 
 ---
@@ -498,9 +500,9 @@ def verify_signature(body: bytes, secret: str, received_signature: str) -> bool:
 | WSS 地址 | `wss://your-domain.com/ws` |
 | 鉴权 Token | `.env → WS_TOKEN` |
 | TG 推送 | `.env → TG_BOT_TOKEN` + 路由分组变量 |
-| 翻译 | `.env → DEEPSEEK_API_KEY` |
+| 翻译 | 普通推文免费 MT（`TRANSLATE_PROVIDERS`）；AI 账号 `.env → DEEPSEEK_API_KEY` |
 | Webhook | `.env → WEBHOOK_URL` |
-| Instagram Webhook | `.env → INSTAGRAM_WEBHOOK_URL` + `INSTAGRAM_WEBHOOK_API_KEY` |
+| Instagram 社媒卡片 | `.env → INSTAGRAM_WEBHOOK_URL` + `INSTAGRAM_WEBHOOK_WORKER_TOKEN` |
 | 对外 WS 心跳间隔 | 30 秒 |
 | GMGN 上游心跳日志 | 10 分钟 |
 | 看门狗超时 | 120 秒（无消息自动刷新页面） |

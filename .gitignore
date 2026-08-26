@@ -20,3 +20,7 @@ monitor_running.png
 *.swp
 docs/instagram_signal_format.md
 docs/webhook_integration_guide.md
+
+# local backups
+*.bak
+*.bak.*

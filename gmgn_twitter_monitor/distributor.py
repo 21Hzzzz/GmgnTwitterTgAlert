@@ -48,6 +48,15 @@ def _is_instagram_message(message: dict) -> bool:
     return message.get("platform_flag") == 4 and "instagram" in tags
 
 
+def _is_binance_square_message(message: dict) -> bool:
+    """GMGN: pf=0 Twitter, pf=2 币安广场, pf=4 Instagram。"""
+    author = message.get("author") or {}
+    tags = author.get("tags") or []
+    if message.get("platform_flag") == 2:
+        return True
+    return "binance_square" in tags
+
+
 def _should_run_text_enrichment(message: dict) -> bool:
     if _is_instagram_message(message):
         from . import config as cfg
@@ -1905,6 +1914,8 @@ class BinanceSquareWebhookDistributor(BaseDistributor):
         return "\n".join(lines).strip()
 
     def _build_payload(self, message: dict) -> dict | None:
+        if not _is_binance_square_message(message):
+            return None
         author = message.get("author") or {}
         handle = (author.get("handle") or "").lower()
         if not handle:
@@ -1935,14 +1946,15 @@ class BinanceSquareWebhookDistributor(BaseDistributor):
 
         category = self.category if self.category in self.VALID_CATEGORIES else "币安最新动态"
         return {
-            "id": self._stable_numeric_id(message, handle),
+            "id": str(self._stable_numeric_id(message, handle)),
             "source": "binance",
+            "type": "binance",
             "title": title,
             "content": content,
             "url": self._build_square_url(message, handle),
             "pub_time": pub_time or int(time.time()),
             "lang": self.lang,
-            "tags": [category, "币安广场", display_name],
+            "tags": ["币安", category, "币安广场", display_name],
             "is_hot": False,
             "is_top": False,
             "pic": self._pick_cover_url(message),
@@ -1978,7 +1990,13 @@ class BinanceSquareWebhookDistributor(BaseDistributor):
                     res_json = json.loads(resp_body) if resp_body else {}
                 except json.JSONDecodeError:
                     res_json = {}
-                if not res_json or res_json.get("status") == "success" or res_json.get("code") == 200:
+                if (
+                    not res_json
+                    or res_json.get("status") == "success"
+                    or res_json.get("code") == 200
+                    or res_json.get("msg") == "success"
+                    or res_json.get("ok") is True
+                ):
                     logger.info(
                         f"🔶 Binance Square Webhook 推送成功: "
                         f"@{(message.get('author') or {}).get('handle')} "
@@ -2008,12 +2026,14 @@ class InstagramWebhookDistributor(BaseDistributor):
     def __init__(
         self,
         url: str,
-        api_key: str,
+        worker_token: str,
+        verify_ssl: bool = True,
         handles: list[str] | None = None,
         notes: dict[str, str] | None = None,
     ):
         self.url = url
-        self.api_key = api_key
+        self.worker_token = worker_token
+        self.verify_ssl = verify_ssl
         self.handles = {h.lower() for h in (handles or []) if h}
         self.notes = {k.lower(): v for k, v in (notes or {}).items()}
         self._session: aiohttp.ClientSession | None = None
@@ -2061,6 +2081,17 @@ class InstagramWebhookDistributor(BaseDistributor):
         return next((item.get("url") for item in media if item.get("url")), "")
 
     @staticmethod
+    def _pick_video_url(media: list[dict]) -> str:
+        return next(
+            (
+                item.get("url")
+                for item in media
+                if item.get("type") == "video" and item.get("url")
+            ),
+            "",
+        )
+
+    @staticmethod
     def _build_post_identity(username: str, raw_id: str) -> tuple[str, str]:
         if raw_id.isdigit():
             return f"story_{raw_id}", f"https://www.instagram.com/stories/{username}/{raw_id}/"
@@ -2106,13 +2137,16 @@ class InstagramWebhookDistributor(BaseDistributor):
         except (TypeError, ValueError):
             timestamp = 0.0
 
-        tz_cst = timezone(timedelta(hours=8))
         now_utc = datetime.now(timezone.utc)
+        if timestamp <= 0:
+            timestamp = now_utc.timestamp()
+        tz_cst = timezone(timedelta(hours=8))
         now_local = now_utc.astimezone(tz_cst)
         published_time = self._format_local_time(timestamp, tz_cst)
         sys_time = now_local.strftime("%Y-%m-%d %H:%M:%S")
         avatar_url = author.get("avatar") or ""
         cover_url = self._pick_cover_url(media)
+        video_url = self._pick_video_url(media)
         identity_suffix = str(message.get("_instagram_identity_fingerprint") or "")[:8]
         content_text = content.get("text") or ""
 
@@ -2126,26 +2160,32 @@ class InstagramWebhookDistributor(BaseDistributor):
             change_after = avatar_change.get("after") or ""
             avatar_url = change_after or avatar_url
             cover_url = change_after or cover_url or avatar_url
-            shortcode = f"profile_photo_{raw_id}"
+            shortcode = f"avatar_{raw_id}"
             post_url = f"https://www.instagram.com/{username}/"
         elif action == "description":
             change_before = bio_change.get("before") or ""
             change_after = bio_change.get("after") or ""
             content_text = content_text or change_after
             cover_url = cover_url or avatar_url
-            shortcode = f"profile_description_{raw_id}"
+            shortcode = f"bio_{raw_id}"
             post_url = f"https://www.instagram.com/{username}/"
+        elif shortcode.startswith("story_") and not content_text.startswith("[Story]"):
+            content_text = f"[Story] {content_text}".strip()
+        elif video_url and not content_text.startswith("[Reel]"):
+            content_text = f"[Reel] {content_text}".strip()
 
         if message.get("_instagram_identity_collided") and identity_suffix:
             shortcode = f"{shortcode}_{identity_suffix}"
 
-        return {
+        payload = {
             "username": username,
             "note": note,
             "shortcode": shortcode,
             "content": content_text,
             "cover_url": cover_url,
+            "video_url": video_url,
             "avatar_url": avatar_url,
+            "profile_pic_url": avatar_url,
             "taken_at": timestamp,
             "post_url": post_url,
             "detected_at": now_utc.isoformat(),
@@ -2163,6 +2203,17 @@ class InstagramWebhookDistributor(BaseDistributor):
             "change_after": change_after,
             "display_name": user_display,
         }
+        if action == "description":
+            payload.update(
+                {
+                    "change_type": "biography",
+                    "old_biography": change_before,
+                    "new_biography": change_after,
+                }
+            )
+        if isinstance(message.get("ai_result"), dict):
+            payload["ai_result"] = message["ai_result"]
+        return payload
 
     async def distribute(self, message: dict) -> None:
         if not self.url or not self._session:
@@ -2174,9 +2225,10 @@ class InstagramWebhookDistributor(BaseDistributor):
         if not payload:
             return
 
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["X-API-Key"] = self.api_key
+        headers = {
+            "Content-Type": "application/json",
+            "X-Worker-Token": self.worker_token,
+        }
 
         if not self._queue:
             await self._post_payload(payload, headers)
@@ -2213,7 +2265,12 @@ class InstagramWebhookDistributor(BaseDistributor):
     async def _post_payload(self, payload: dict, headers: dict) -> None:
         for attempt in range(1, self.MAX_RETRY_ATTEMPTS + 1):
             try:
-                async with self._session.post(self.url, json=payload, headers=headers) as resp:
+                async with self._session.post(
+                    self.url,
+                    json=payload,
+                    headers=headers,
+                    ssl=self.verify_ssl,
+                ) as resp:
                     if resp.status < 300:
                         logger.info(f"📸 Instagram Webhook 推送成功: @{payload['username']} {payload['shortcode']} [{resp.status}]")
                         return

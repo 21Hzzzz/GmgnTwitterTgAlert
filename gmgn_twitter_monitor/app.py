@@ -611,7 +611,8 @@ def _build_distributor_hub(storage: SQLiteStorage | None = None) -> DistributorH
         # 6. Instagram 专用 Webhook（InsClawer 兼容格式）
         InstagramWebhookDistributor(
             url=config.INSTAGRAM_WEBHOOK_URL,
-            api_key=config.INSTAGRAM_WEBHOOK_API_KEY,
+            worker_token=config.INSTAGRAM_WEBHOOK_WORKER_TOKEN,
+            verify_ssl=config.INSTAGRAM_WEBHOOK_VERIFY_SSL,
             handles=config.INSTAGRAM_WEBHOOK_HANDLES,
             notes=config.INSTAGRAM_WEBHOOK_NOTES,
         ),

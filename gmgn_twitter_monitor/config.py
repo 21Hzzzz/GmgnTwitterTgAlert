@@ -160,7 +160,15 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 
 # ---------- Instagram Webhook 推送配置 ----------
 INSTAGRAM_WEBHOOK_URL = os.getenv("INSTAGRAM_WEBHOOK_URL", "")
-INSTAGRAM_WEBHOOK_API_KEY = os.getenv("INSTAGRAM_WEBHOOK_API_KEY", "")
+INSTAGRAM_WEBHOOK_WORKER_TOKEN = (
+    os.getenv("INSTAGRAM_WEBHOOK_WORKER_TOKEN")
+    or os.getenv("INTERNAL_NEWS_RECEIVER_KEY")
+    or os.getenv("INSTAGRAM_WEBHOOK_API_KEY", "")
+)
+INSTAGRAM_WEBHOOK_VERIFY_SSL = (
+    os.getenv("INSTAGRAM_WEBHOOK_VERIFY_SSL", "false").lower()
+    in ("true", "1", "yes", "on")
+)
 INSTAGRAM_WEBHOOK_HANDLES = [
     h.strip().lower()
     for h in os.getenv(
@@ -180,12 +188,21 @@ for item in os.getenv("INSTAGRAM_WEBHOOK_NOTES", "").split(","):
         INSTAGRAM_WEBHOOK_NOTES[handle] = note
 INSTAGRAM_TRANSLATION_ENABLE = os.getenv("INSTAGRAM_TRANSLATION_ENABLE", "False").lower() in ("true", "1", "yes")
 
-# ---------- DeepSeek 翻译配置 ----------
+# ---------- 机器翻译（普通推文直译，无需 API Key）----------
+# 与聚合端油管/Ins 相同：Google → Microsoft → 腾讯交互翻译
+_TRANSLATE_DEFAULT = "google,microsoft,transmart"
+TRANSLATE_PROVIDERS: tuple[str, ...] = tuple(
+    p.strip().lower()
+    for p in os.getenv("TRANSLATE_PROVIDERS", _TRANSLATE_DEFAULT).split(",")
+    if p.strip()
+) or ("google", "microsoft", "transmart")
+
+# ---------- DeepSeek（仅 AI 分析账号 + 定时频道总结）----------
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
-# ---------- AI 分析（赛道分类 + 摘要 + 翻译）----------
+# ---------- AI 分析（赛道分类 + 摘要 + 翻译，如白毛股神 aleabitoreddit）----------
 AI_ANALYZE_HANDLES: set[str] = {
     h.strip().lower()
     for h in os.getenv("AI_ANALYZE_HANDLES", "").split(",")
