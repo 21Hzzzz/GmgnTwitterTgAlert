@@ -58,7 +58,7 @@ GmgnTwitterClaw/
 在新的 Ubuntu/Debian VPS 上直接执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/21Hzzzz/GmgnTwitterTgAlert/4f9ad06/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/21Hzzzz/GmgnTwitterTgAlert/d926a82/install.sh | bash
 ```
 
 脚本会自行拉取项目、创建虚拟环境、安装 Python/Chromium 依赖、询问 Telegram 配置和可选的 GMGN 授权链接，并可立即启动。`PROXY_SERVER` 可选，留空即直连。
