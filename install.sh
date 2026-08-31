@@ -31,8 +31,13 @@ if [[ ! -f "$SCRIPT_DIR/requirements.txt" ]]; then
   read -r -p "安装目录 [$DEFAULT_DIR]: " install_dir
   INSTALL_DIR="${install_dir:-$DEFAULT_DIR}"
   if [[ -e "$INSTALL_DIR" ]]; then
-    echo "安装目录已存在：$INSTALL_DIR"
-    echo "请更换目录，或在该目录中运行 install.sh。"
+    if [[ -d "$INSTALL_DIR/.git" && -f "$INSTALL_DIR/requirements.txt" ]]; then
+      echo "检测到已有项目，正在更新安装器..."
+      git -C "$INSTALL_DIR" pull --ff-only origin main
+      exec bash "$INSTALL_DIR/install.sh"
+    fi
+    echo "安装目录已存在且不是有效项目：$INSTALL_DIR"
+    echo "请更换安装目录后重试。"
     exit 1
   fi
   git clone "$REPO_URL" "$INSTALL_DIR"
