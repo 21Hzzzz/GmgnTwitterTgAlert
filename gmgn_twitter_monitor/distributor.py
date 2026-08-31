@@ -224,7 +224,9 @@ class TelegramDistributor(BaseDistributor):
             logger.info("📱 Telegram 分发器已关闭")
 
     def _should_forward(self, message: dict) -> bool:
-        """根据白名单判断是否需要转发该消息。"""
+        """只推送关注动作；可选白名单仍可进一步限制账号。"""
+        if message.get("action") != "follow":
+            return False
         if not self.filter_handles:
             return True
         handle = message.get("author", {}).get("handle", "")
@@ -989,7 +991,7 @@ class TelegramDistributor(BaseDistributor):
             _diag_log(message, "TG 跳过: session 未启动", level="warning")
             return
         if not self._should_forward(message):
-            _diag_log(message, f"TG 跳过: 不在白名单 filter={self.filter_handles}", level="warning")
+            _diag_log(message, "TG 跳过: 非关注动作或未匹配白名单", level="warning")
             return
 
         handle = message.get("author", {}).get("handle", "?")
