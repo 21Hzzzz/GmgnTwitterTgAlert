@@ -51,46 +51,6 @@ TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
 TG_ENABLE_DEFAULT = os.getenv("TG_ENABLE_DEFAULT", "False").lower() in ("true", "1", "yes")
 TG_CHANNEL_ID = os.getenv("TG_CHANNEL_ID", "")
 
-# 动态解析路由分组
-TG_CHANNEL_MAP: dict[str, list[str]] = {}
-# TG 赛道过滤: {handle: {channel_id: [关键词...]}}，空列表表示不过滤
-TG_CHANNEL_TRACK_FILTER: dict[str, dict[str, list[str]]] = {}
-_routing_handles = set()
-
-for k, v in os.environ.items():
-    if k.startswith("TG_ROUTING_") and v:
-        group_name = k[len("TG_ROUTING_"):]
-        handles = [h.strip().lower() for h in v.split(",") if h.strip()]
-
-        # 解析 TG 路由
-        tg_enable_str = os.getenv(f"TG_ENABLE_{group_name}", "True").lower()
-        if tg_enable_str in ("true", "1", "yes"):
-            channel_id = os.getenv(f"TG_CHANNEL_ID_{group_name}")
-            # 赛道过滤关键词（逗号分隔，空则不过滤）
-            tg_track_raw = os.getenv(f"TG_TRACK_FILTER_{group_name}", "")
-            tg_track_filter = [kw.strip() for kw in tg_track_raw.split(",") if kw.strip()]
-            if channel_id:
-                for h in handles:
-                    if h not in TG_CHANNEL_MAP:
-                        TG_CHANNEL_MAP[h] = []
-                    if channel_id not in TG_CHANNEL_MAP[h]:
-                        TG_CHANNEL_MAP[h].append(channel_id)
-                    # 记录该 handle+channel 的赛道过滤规则
-                    if tg_track_filter:
-                        if h not in TG_CHANNEL_TRACK_FILTER:
-                            TG_CHANNEL_TRACK_FILTER[h] = {}
-                        TG_CHANNEL_TRACK_FILTER[h][channel_id] = tg_track_filter
-                    _routing_handles.add(h)
-        
-TG_FILTER_HANDLES = [
-    h.strip().lower()
-    for h in os.getenv("TG_FILTER_HANDLES", "").split(",")
-    if h.strip()
-]
-# 自动将启用路由组中的博主并入全局监控白名单
-if _routing_handles:
-    TG_FILTER_HANDLES = list(set(TG_FILTER_HANDLES) | _routing_handles)
-
 # ---------- Binance Square 内容识别 ----------
 BINANCE_SQUARE_HANDLES = [
     h.strip().lower()

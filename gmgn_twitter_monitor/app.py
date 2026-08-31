@@ -574,8 +574,8 @@ def _build_distributor_hub(storage: SQLiteStorage | None = None) -> DistributorH
             bot_token=config.TG_BOT_TOKEN,
             default_channel_id=config.TG_CHANNEL_ID,
             enable_default=config.TG_ENABLE_DEFAULT,
-            channel_map=config.TG_CHANNEL_MAP,
-            filter_handles=config.TG_FILTER_HANDLES,
+            channel_map={},
+            filter_handles=[],
             storage=storage,
         ),
     ]
