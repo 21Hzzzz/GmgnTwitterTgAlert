@@ -50,6 +50,8 @@ DIAG_HANDLES = {
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
 TG_ENABLE_DEFAULT = os.getenv("TG_ENABLE_DEFAULT", "False").lower() in ("true", "1", "yes")
 TG_CHANNEL_ID = os.getenv("TG_CHANNEL_ID", "")
+# 单频道模式不使用赛道路由；保留空映射以兼容 Telegram 格式化逻辑。
+TG_CHANNEL_TRACK_FILTER: dict[str, dict[str, list[str]]] = {}
 
 # ---------- Binance Square 内容识别 ----------
 BINANCE_SQUARE_HANDLES = [
