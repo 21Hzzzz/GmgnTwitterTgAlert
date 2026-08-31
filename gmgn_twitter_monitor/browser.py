@@ -105,7 +105,8 @@ class BrowserManager:
 
     async def goto_monitor_page(self):
         logger.info(f"正在跳转监控目标网站: {config.MONITOR_URL}")
-        await self.page.goto(config.MONITOR_URL, wait_until="networkidle")
+        # GMGN 页面会持续维持 WebSocket 心跳；等待 networkidle 会因此必然超时。
+        await self.page.goto(config.MONITOR_URL, wait_until="domcontentloaded", timeout=60_000)
         await self.page.wait_for_timeout(5000)
 
     async def handle_popups(self):
