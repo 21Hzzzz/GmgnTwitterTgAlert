@@ -23,14 +23,9 @@ except ImportError:
 from . import config
 from .browser import BrowserManager
 from .distributor import (
-    BinanceSquareWebhookDistributor,
     DistributorHub,
     LoggingDistributor,
     TelegramDistributor,
-    FeishuDistributor,
-    InstagramWebhookDistributor,
-    WebhookDistributor,
-    WebSocketDistributor,
 )
 from .logging_setup import setup_logging
 from .parser import build_standardized_message, extract_triggers_map, parse_socketio_payload
@@ -583,50 +578,7 @@ def _build_distributor_hub(storage: SQLiteStorage | None = None) -> DistributorH
             filter_handles=config.TG_FILTER_HANDLES,
             storage=storage,
         ),
-        # 3. 飞书分组推送 (与 TG 分组同源并发)
-        FeishuDistributor(
-            app_id=config.FEISHU_APP_ID,
-            app_secret=config.FEISHU_APP_SECRET,
-            default_webhook=config.FEISHU_WEBHOOK_DEFAULT,
-            default_secret=config.FEISHU_SECRET_DEFAULT,
-            enable_default=config.FEISHU_ENABLE_DEFAULT,
-            channel_map=config.FEISHU_CHANNEL_MAP,
-            filter_handles=config.TG_FILTER_HANDLES,
-            storage=storage,
-        ),
-        # 4. Webhook HTTP POST
-        WebhookDistributor(
-            url=config.WEBHOOK_URL,
-            secret=config.WEBHOOK_SECRET,
-        ),
-        # 5. Binance Square 专用 Webhook（币安聚合端 newsflash 格式）
-        BinanceSquareWebhookDistributor(
-            url=config.BINANCE_SQUARE_WEBHOOK_URL,
-            worker_token=config.BINANCE_SQUARE_WEBHOOK_KEY,
-            handles=config.BINANCE_SQUARE_HANDLES,
-            notes=config.BINANCE_SQUARE_WEBHOOK_NOTES,
-            category=config.BINANCE_SQUARE_WEBHOOK_CATEGORY,
-            lang=config.BINANCE_SQUARE_WEBHOOK_LANG,
-        ),
-        # 6. Instagram 专用 Webhook（InsClawer 兼容格式）
-        InstagramWebhookDistributor(
-            url=config.INSTAGRAM_WEBHOOK_URL,
-            worker_token=config.INSTAGRAM_WEBHOOK_WORKER_TOKEN,
-            verify_ssl=config.INSTAGRAM_WEBHOOK_VERIFY_SSL,
-            handles=config.INSTAGRAM_WEBHOOK_HANDLES,
-            notes=config.INSTAGRAM_WEBHOOK_NOTES,
-        ),
     ]
-    if config.WS_ENABLE:
-        distributors.insert(
-            1,
-            WebSocketDistributor(
-                host=config.WS_HOST,
-                port=config.WS_PORT,
-                token=config.WS_TOKEN,
-                heartbeat_interval=config.WS_HEARTBEAT_INTERVAL,
-            ),
-        )
     return DistributorHub(distributors, storage=storage)
 
 

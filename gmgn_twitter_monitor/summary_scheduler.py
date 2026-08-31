@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 from . import config
-from .distributor import FeishuDistributor, TelegramDistributor
+from .distributor import TelegramDistributor
 from .summarizer import summarize_channel_tweets
 
 try:
@@ -110,7 +110,6 @@ class DailySummaryScheduler:
             summary_key, source_platform, source_target_id, window_start, window_end
         )
         existing_tg_sent = bool(existing_run and existing_run.get("tg_sent"))
-        existing_feishu_sent = bool(existing_run and existing_run.get("feishu_sent"))
         summary_text = (existing_run or {}).get("content") or ""
         total_count = await self.storage.count_delivered_messages(
             source_platform,
@@ -159,7 +158,7 @@ class DailySummaryScheduler:
                 status="failed",
                 item_count=len(items),
                 tg_sent=existing_tg_sent,
-                feishu_sent=existing_feishu_sent,
+                feishu_sent=True,
                 error="AI summary returned empty",
             )
             logger.error(
@@ -168,17 +167,13 @@ class DailySummaryScheduler:
             )
             return
 
-        title = f"{summary_conf.get('label') or summary_key} 频道摘要"
-        tg_ok, fs_ok = await self._send_summary(
+        tg_ok = await self._send_summary(
             summary_conf,
-            title,
             summary_text,
             skip_tg=existing_tg_sent,
-            skip_feishu=existing_feishu_sent,
         )
         final_tg_sent = existing_tg_sent or tg_ok or not summary_conf.get("target_tg_channel_id")
-        final_feishu_sent = existing_feishu_sent or fs_ok or not summary_conf.get("target_feishu_webhook")
-        status = "sent_all" if final_tg_sent and final_feishu_sent else "partial"
+        status = "sent_all" if final_tg_sent else "partial"
         await self.storage.record_summary_run(
             summary_key,
             source_platform,
@@ -188,7 +183,7 @@ class DailySummaryScheduler:
             status=status,
             item_count=len(items),
             tg_sent=final_tg_sent,
-            feishu_sent=final_feishu_sent,
+            feishu_sent=True,
             content=summary_text,
         )
         logger.info(f"🧾 频道总结完成: {summary_key} items={len(items)} status={status}")
@@ -196,41 +191,28 @@ class DailySummaryScheduler:
     async def _send_summary(
         self,
         summary_conf: dict,
-        title: str,
         text: str,
         skip_tg: bool = False,
-        skip_feishu: bool = False,
-    ) -> tuple[bool, bool]:
+    ) -> bool:
         tg_ok = False
-        fs_ok = False
         tg_channel_id = summary_conf.get("target_tg_channel_id")
-        fs_webhook = summary_conf.get("target_feishu_webhook")
-        fs_secret = summary_conf.get("target_feishu_secret", "")
 
         send_tasks = []
-        send_targets = []
         for distributor in self.hub.distributors:
             if tg_channel_id and not skip_tg and isinstance(distributor, TelegramDistributor):
                 send_tasks.append(distributor.send_summary(tg_channel_id, text))
-                send_targets.append("telegram")
-            if fs_webhook and not skip_feishu and isinstance(distributor, FeishuDistributor):
-                send_tasks.append(distributor.send_summary(fs_webhook, fs_secret, title, text))
-                send_targets.append("feishu")
 
         if not send_tasks:
-            logger.warning("🧾 未找到可用的 TG/飞书分发器，摘要无法推送")
-            return False, False
+            logger.warning("🧾 未找到可用的 Telegram 分发器，摘要无法推送")
+            return False
 
         results = await asyncio.gather(*send_tasks, return_exceptions=True)
-        for target, result in zip(send_targets, results):
+        for result in results:
             ok = result is True
-            if target == "telegram":
-                tg_ok = ok
-            elif target == "feishu":
-                fs_ok = ok
+            tg_ok = tg_ok or ok
             if isinstance(result, Exception):
-                logger.error(f"🧾 {target} 摘要推送异常: {result}")
-        return tg_ok, fs_ok
+                logger.error(f"🧾 Telegram 摘要推送异常: {result}")
+        return tg_ok
 
     async def _catch_up_missed_window(self) -> None:
         now = datetime.now(self._tz)

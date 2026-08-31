@@ -58,10 +58,9 @@ def _is_binance_square_message(message: dict) -> bool:
 
 
 def _should_run_text_enrichment(message: dict) -> bool:
+    """Only Telegram-compatible Twitter/Binance content is enriched."""
     if _is_instagram_message(message):
-        from . import config as cfg
-        if not cfg.INSTAGRAM_TRANSLATION_ENABLE:
-            return False
+        return False
     return message.get("action") in TEXT_ENRICHMENT_ACTIONS
 
 

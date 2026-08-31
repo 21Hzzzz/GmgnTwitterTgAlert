@@ -15,15 +15,15 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-FIRST_RUN_LOGIN = False
-AUTH_URL = "https://gmgn.ai/tglogin?user_id=53b06598-3e2b-4d2f-aec6-f2e5881def90&code=41585435-24af-4131-b275-0aab311da4a3&id=0eae54fb142533ac"
+FIRST_RUN_LOGIN = os.getenv("FIRST_RUN_LOGIN", "False").lower() in ("true", "1", "yes")
+AUTH_URL = os.getenv("AUTH_URL", "")
 
 LOG_FILE = str(BASE_DIR / "twitter_monitor.log")
 USER_DATA_DIR = str(BASE_DIR / "browser_data")
 SCREENSHOT_PATH = str(BASE_DIR / "monitor_running.png")
 SUMMARY_DB_PATH = os.getenv("SUMMARY_DB_PATH", str(BASE_DIR / "twitter_monitor.db"))
 MONITOR_URL = "https://gmgn.ai/follow?target=xTracker&chain=bsc"
-PROXY_SERVER = "socks5://127.0.0.1:40000"
+PROXY_SERVER = os.getenv("PROXY_SERVER", "")
 WATCHDOG_TIMEOUT = 120
 WATCHDOG_POLL_INTERVAL = 5
 XVFB_WIDTH = 1920
@@ -46,13 +46,6 @@ DIAG_HANDLES = {
     if h.strip()
 }
 
-# ---------- WebSocket 分发配置 ----------
-WS_ENABLE = os.getenv("WS_ENABLE", "False").lower() in ("true", "1", "yes")
-WS_HOST = os.getenv("WS_HOST", "0.0.0.0")
-WS_PORT = _int_env("WS_PORT", 8765)
-WS_TOKEN = os.getenv("WS_TOKEN", "change-me-to-a-strong-token")
-WS_HEARTBEAT_INTERVAL = _int_env("WS_HEARTBEAT_INTERVAL", 30)
-
 # ---------- Telegram 推送配置 ----------
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
 TG_ENABLE_DEFAULT = os.getenv("TG_ENABLE_DEFAULT", "False").lower() in ("true", "1", "yes")
@@ -62,7 +55,6 @@ TG_CHANNEL_ID = os.getenv("TG_CHANNEL_ID", "")
 TG_CHANNEL_MAP: dict[str, list[str]] = {}
 # TG 赛道过滤: {handle: {channel_id: [关键词...]}}，空列表表示不过滤
 TG_CHANNEL_TRACK_FILTER: dict[str, dict[str, list[str]]] = {}
-FEISHU_CHANNEL_MAP: dict[str, list[dict]] = {}
 _routing_handles = set()
 
 for k, v in os.environ.items():
@@ -90,25 +82,6 @@ for k, v in os.environ.items():
                         TG_CHANNEL_TRACK_FILTER[h][channel_id] = tg_track_filter
                     _routing_handles.add(h)
         
-        # 解析飞书路由 (共用 TG_ROUTING 的 handle 列表)
-        fs_enable_str = os.getenv(f"FEISHU_ENABLE_{group_name}", "True").lower()
-        if fs_enable_str in ("true", "1", "yes"):
-            fs_webhook = os.getenv(f"FEISHU_WEBHOOK_{group_name}")
-            fs_secret = os.getenv(f"FEISHU_SECRET_{group_name}", "")
-            # 赛道过滤关键词（逗号分隔，空则不过滤）
-            fs_track_raw = os.getenv(f"FEISHU_TRACK_FILTER_{group_name}", "")
-            fs_track_filter = [kw.strip() for kw in fs_track_raw.split(",") if kw.strip()]
-            if fs_webhook:
-                for h in handles:
-                    if h not in FEISHU_CHANNEL_MAP:
-                        FEISHU_CHANNEL_MAP[h] = []
-                    if not any(item['webhook'] == fs_webhook for item in FEISHU_CHANNEL_MAP[h]):
-                        entry: dict = {"webhook": fs_webhook, "secret": fs_secret}
-                        if fs_track_filter:
-                            entry["track_filter"] = fs_track_filter
-                        FEISHU_CHANNEL_MAP[h].append(entry)
-                _routing_handles.add(h)
-
 TG_FILTER_HANDLES = [
     h.strip().lower()
     for h in os.getenv("TG_FILTER_HANDLES", "").split(",")
@@ -118,76 +91,12 @@ TG_FILTER_HANDLES = [
 if _routing_handles:
     TG_FILTER_HANDLES = list(set(TG_FILTER_HANDLES) | _routing_handles)
 
-# ---------- Binance Square 配置 ----------
+# ---------- Binance Square 内容识别 ----------
 BINANCE_SQUARE_HANDLES = [
     h.strip().lower()
     for h in os.getenv("BINANCE_SQUARE_HANDLES", "cz,heyi,richardteng").split(",")
     if h.strip()
 ]
-BINANCE_SQUARE_WEBHOOK_URL = (
-    os.getenv("BINANCE_SQUARE_WEBHOOK_URL")
-    or os.getenv("INTERNAL_NEWS_RECEIVER_URL", "")
-)
-BINANCE_SQUARE_WEBHOOK_KEY = (
-    os.getenv("BINANCE_SQUARE_WEBHOOK_KEY")
-    or os.getenv("INTERNAL_NEWS_RECEIVER_KEY", "")
-)
-BINANCE_SQUARE_WEBHOOK_CATEGORY = os.getenv("BINANCE_SQUARE_WEBHOOK_CATEGORY", "币安最新动态")
-BINANCE_SQUARE_WEBHOOK_LANG = os.getenv("BINANCE_SQUARE_WEBHOOK_LANG", "zh-CN")
-BINANCE_SQUARE_WEBHOOK_NOTES: dict[str, str] = {}
-for item in os.getenv(
-    "BINANCE_SQUARE_WEBHOOK_NOTES",
-    "cz:CZ,heyi:Yi He,richardteng:Richard Teng",
-).split(","):
-    if ":" not in item:
-        continue
-    handle, note = item.split(":", 1)
-    handle = handle.strip().lower()
-    note = note.strip()
-    if handle:
-        BINANCE_SQUARE_WEBHOOK_NOTES[handle] = note
-
-# ---------- 飞书推送配置 ----------
-FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
-FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
-FEISHU_WEBHOOK_DEFAULT = os.getenv("FEISHU_WEBHOOK_DEFAULT", "")
-FEISHU_SECRET_DEFAULT = os.getenv("FEISHU_SECRET_DEFAULT", "")
-FEISHU_ENABLE_DEFAULT = os.getenv("FEISHU_ENABLE_DEFAULT", "False").lower() in ("true", "1", "yes")
-
-# ---------- Webhook 推送配置 ----------
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
-
-# ---------- Instagram Webhook 推送配置 ----------
-INSTAGRAM_WEBHOOK_URL = os.getenv("INSTAGRAM_WEBHOOK_URL", "")
-INSTAGRAM_WEBHOOK_WORKER_TOKEN = (
-    os.getenv("INSTAGRAM_WEBHOOK_WORKER_TOKEN")
-    or os.getenv("INTERNAL_NEWS_RECEIVER_KEY")
-    or os.getenv("INSTAGRAM_WEBHOOK_API_KEY", "")
-)
-INSTAGRAM_WEBHOOK_VERIFY_SSL = (
-    os.getenv("INSTAGRAM_WEBHOOK_VERIFY_SSL", "false").lower()
-    in ("true", "1", "yes", "on")
-)
-INSTAGRAM_WEBHOOK_HANDLES = [
-    h.strip().lower()
-    for h in os.getenv(
-        "INSTAGRAM_WEBHOOK_HANDLES",
-        "binance,binance.zh,kabosumama,whitehouse,realdonaldtrump,openai,donaldjtrumpjr,chatgpt,erictrump,knowyourmeme,ivankatrump",
-    ).split(",")
-    if h.strip()
-]
-INSTAGRAM_WEBHOOK_NOTES: dict[str, str] = {}
-for item in os.getenv("INSTAGRAM_WEBHOOK_NOTES", "").split(","):
-    if ":" not in item:
-        continue
-    handle, note = item.split(":", 1)
-    handle = handle.strip().lower()
-    note = note.strip()
-    if handle:
-        INSTAGRAM_WEBHOOK_NOTES[handle] = note
-INSTAGRAM_TRANSLATION_ENABLE = os.getenv("INSTAGRAM_TRANSLATION_ENABLE", "False").lower() in ("true", "1", "yes")
-
 # ---------- 机器翻译（普通推文直译，无需 API Key）----------
 # 与聚合端油管/Ins 相同：Google → Microsoft → 腾讯交互翻译
 _TRANSLATE_DEFAULT = "google,microsoft,transmart"
@@ -236,15 +145,6 @@ for group_name in SUMMARY_GROUPS:
         os.getenv(f"SUMMARY_TG_CHANNEL_ID_{group_name}")
         or source_channel_id
     )
-    target_feishu_webhook = (
-        os.getenv(f"SUMMARY_FEISHU_WEBHOOK_{group_name}")
-        or os.getenv(f"FEISHU_WEBHOOK_{group_name}", "")
-    )
-    target_feishu_secret = (
-        os.getenv(f"SUMMARY_FEISHU_SECRET_{group_name}")
-        or os.getenv(f"FEISHU_SECRET_{group_name}", "")
-    )
-
     if source_channel_id:
         SUMMARY_CHANNELS.append({
             "key": group_name,
@@ -252,6 +152,4 @@ for group_name in SUMMARY_GROUPS:
             "source_platform": os.getenv(f"SUMMARY_SOURCE_PLATFORM_{group_name}", "telegram"),
             "source_target_id": source_channel_id,
             "target_tg_channel_id": target_tg_channel_id,
-            "target_feishu_webhook": target_feishu_webhook,
-            "target_feishu_secret": target_feishu_secret,
         })

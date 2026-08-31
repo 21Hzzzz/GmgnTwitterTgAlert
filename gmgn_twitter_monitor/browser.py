@@ -15,10 +15,9 @@ class BrowserManager:
 
     async def launch(self, playwright: Playwright) -> Page:
         logger.info(f"正在启动浏览器，使用持久化数据目录: {config.USER_DATA_DIR}")
-        self.context = await playwright.chromium.launch_persistent_context(
+        launch_options = dict(
             user_data_dir=config.USER_DATA_DIR,
             headless=False,
-            proxy={"server": config.PROXY_SERVER},
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
@@ -26,6 +25,9 @@ class BrowserManager:
                 "--start-maximized",
             ],
         )
+        if config.PROXY_SERVER:
+            launch_options["proxy"] = {"server": config.PROXY_SERVER}
+        self.context = await playwright.chromium.launch_persistent_context(**launch_options)
         await self._install_ws_subscription_filter()
         restored_pages = list(self.context.pages)
         self.page = await self.context.new_page()
@@ -91,6 +93,9 @@ class BrowserManager:
     async def run_first_login_if_needed(self):
         if not config.FIRST_RUN_LOGIN:
             return
+
+        if not config.AUTH_URL:
+            raise RuntimeError("FIRST_RUN_LOGIN=True 时必须在 .env 中设置 AUTH_URL")
 
         logger.info("检测到开启了首次运行登录模式，正在访问授权登录网页...")
         await self.page.goto(config.AUTH_URL, wait_until="networkidle")
