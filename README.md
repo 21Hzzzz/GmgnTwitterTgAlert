@@ -61,7 +61,7 @@ GmgnTwitterClaw/
 curl -fsSL https://raw.githubusercontent.com/21Hzzzz/GmgnTwitterTgAlert/d926a82/install.sh | bash
 ```
 
-脚本会自行拉取项目、创建虚拟环境、安装 Python/Chromium 依赖、询问 Telegram 配置和可选的 GMGN 授权链接，并可立即启动。`PROXY_SERVER` 可选，留空即直连。
+脚本会自行拉取项目、创建虚拟环境、安装 Python/Chromium 依赖、询问 Telegram 配置和可选的 GMGN 授权链接，并自动创建 systemd 后台服务（开机自启、崩溃后重启）。`PROXY_SERVER` 可选，留空即直连。
 
 更新：
 
@@ -73,6 +73,12 @@ curl -fsSL https://raw.githubusercontent.com/21Hzzzz/GmgnTwitterTgAlert/main/upd
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/21Hzzzz/GmgnTwitterTgAlert/main/uninstall.sh | bash
+```
+
+查看后台日志：
+
+```bash
+journalctl -u gmgn-twitter-monitor -f
 ```
 
 

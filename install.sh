@@ -47,6 +47,8 @@ fi
 PROJECT_DIR="$SCRIPT_DIR"
 VENV_DIR="$PROJECT_DIR/.venv"
 ENV_FILE="$PROJECT_DIR/.env"
+SERVICE_NAME="gmgn-twitter-monitor"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 set_env_value() {
   local key="$1"
@@ -67,6 +69,38 @@ prompt_default() {
   local answer
   read -r -p "$label [$default]: " answer </dev/tty
   printf '%s' "${answer:-$default}"
+}
+
+install_service() {
+  command -v systemctl >/dev/null || {
+    echo "未检测到 systemd，无法创建后台服务。"
+    return 1
+  }
+
+  local run_user
+  run_user="$(id -un)"
+  run_privileged tee "$SERVICE_FILE" >/dev/null <<EOF
+[Unit]
+Description=GMGN Telegram Follow Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${run_user}
+WorkingDirectory=${PROJECT_DIR}
+Environment=PYTHONUNBUFFERED=1
+ExecStart=${VENV_DIR}/bin/python -m gmgn_twitter_monitor
+Restart=always
+RestartSec=10
+RuntimeMaxSec=43200
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  run_privileged systemctl daemon-reload
+  run_privileged systemctl enable --now "$SERVICE_NAME"
 }
 
 command -v python3 >/dev/null || install_prerequisites
@@ -124,11 +158,6 @@ fi
 
 echo
 echo "安装完成。配置文件：$ENV_FILE"
-echo "首次授权成功后，请将 FIRST_RUN_LOGIN 改回 False。"
-read -r -p "立即启动监控？[y/N]: " start_now </dev/tty
-if [[ "${start_now:-N}" =~ ^[Yy]$ ]]; then
-  cd "$PROJECT_DIR"
-  exec "$VENV_DIR/bin/python" -m gmgn_twitter_monitor
-fi
-
-echo "稍后可运行：$VENV_DIR/bin/python -m gmgn_twitter_monitor"
+install_service
+echo "后台服务已启动，并已设置为开机自启。"
+echo "查看日志：journalctl -u $SERVICE_NAME -f"

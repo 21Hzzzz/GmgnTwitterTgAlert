@@ -101,6 +101,13 @@ class BrowserManager:
         await self.page.goto(config.AUTH_URL, wait_until="networkidle")
         logger.info("授权网页加载完成，正在等待 8 秒钟让网站将凭证写入本地缓存文件...")
         await self.page.wait_for_timeout(8000)
+        env_file = config.BASE_DIR / ".env"
+        if env_file.exists():
+            env_text = env_file.read_text(encoding="utf-8")
+            env_text = re.sub(r"^FIRST_RUN_LOGIN=.*$", "FIRST_RUN_LOGIN=False", env_text, flags=re.MULTILINE)
+            env_text = re.sub(r"^AUTH_URL=.*$", "AUTH_URL=", env_text, flags=re.MULTILINE)
+            env_file.write_text(env_text, encoding="utf-8")
+        config.FIRST_RUN_LOGIN = False
         logger.success("网站缓存吸录完毕！下一次启动可将 FIRST_RUN_LOGIN 改回 False。")
 
     async def goto_monitor_page(self):

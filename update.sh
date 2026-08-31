@@ -5,6 +5,15 @@ set -euo pipefail
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 DEFAULT_DIR="$HOME/GmgnTwitterTgAlert"
+SERVICE_NAME="gmgn-twitter-monitor"
+
+run_privileged() {
+  if [[ "$EUID" -eq 0 ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
 
 if [[ -f "$SCRIPT_DIR/requirements.txt" ]]; then
   PROJECT_DIR="$SCRIPT_DIR"
@@ -28,6 +37,5 @@ echo "正在更新项目：$PROJECT_DIR"
 git -C "$PROJECT_DIR" pull --ff-only origin main
 "$VENV_PYTHON" -m pip install -q -r "$PROJECT_DIR/requirements.txt"
 "$PROJECT_DIR/.venv/bin/playwright" install chromium
-
-echo "更新完成。请重启监控进程以加载新版本："
-echo "cd $PROJECT_DIR && .venv/bin/python -m gmgn_twitter_monitor"
+bash "$PROJECT_DIR/service.sh"
+echo "更新完成，后台服务已重启。"
