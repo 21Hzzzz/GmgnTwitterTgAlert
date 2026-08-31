@@ -3,7 +3,8 @@
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/21Hzzzz/GmgnTwitterTgAlert.git}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 
 run_privileged() {
   if [[ "$EUID" -eq 0 ]]; then
@@ -64,11 +65,13 @@ prompt_default() {
 }
 
 command -v python3 >/dev/null || install_prerequisites
+python3 -c 'import ensurepip, venv' >/dev/null 2>&1 || install_prerequisites
 
 echo "== GmgnTwitterClaw 交互式安装 =="
 echo "项目目录：$PROJECT_DIR"
 
-if [[ ! -d "$VENV_DIR" ]]; then
+if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+  rm -rf "$VENV_DIR"
   python3 -m venv "$VENV_DIR"
 fi
 
