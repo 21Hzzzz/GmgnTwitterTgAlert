@@ -33,9 +33,37 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
   exit 1
 fi
 
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  local env_file="$PROJECT_DIR/.env"
+  local escaped
+  escaped="$(printf '%s' "$value" | sed 's/[\\&|]/\\&/g')"
+
+  if grep -q "^${key}=" "$env_file"; then
+    sed -i "s|^${key}=.*|${key}=${escaped}|" "$env_file"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$env_file"
+  fi
+}
+
 echo "正在更新项目：$PROJECT_DIR"
 git -C "$PROJECT_DIR" pull --ff-only origin main
 "$VENV_PYTHON" -m pip install -q -r "$PROJECT_DIR/requirements.txt"
 "$PROJECT_DIR/.venv/bin/playwright" install chromium
+
+read -r -p "更新后是否重新进行 GMGN 授权登录？[y/N]: " configure_auth </dev/tty
+if [[ "${configure_auth:-N}" =~ ^[Yy]$ ]]; then
+  read -r -p "粘贴新的 GMGN 授权链接: " auth_url </dev/tty
+  while [[ -z "$auth_url" ]]; do
+    read -r -p "授权链接不能为空，请重新输入: " auth_url </dev/tty
+  done
+  set_env_value "FIRST_RUN_LOGIN" "True"
+  set_env_value "AUTH_URL" "$auth_url"
+  echo "已设置为下次启动时重新授权。"
+else
+  echo "保留现有 GMGN 登录态。"
+fi
+
 bash "$PROJECT_DIR/service.sh"
 echo "更新完成，后台服务已重启。"
