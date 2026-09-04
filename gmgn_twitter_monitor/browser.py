@@ -98,7 +98,9 @@ class BrowserManager:
             raise RuntimeError("FIRST_RUN_LOGIN=True 时必须在 .env 中设置 AUTH_URL")
 
         logger.info("检测到开启了首次运行登录模式，正在访问授权登录网页...")
-        await self.page.goto(config.AUTH_URL, wait_until="networkidle")
+        # GMGN keeps a WebSocket heartbeat alive on the authorization page, so
+        # waiting for networkidle makes the first-login flow time out forever.
+        await self.page.goto(config.AUTH_URL, wait_until="domcontentloaded", timeout=60_000)
         logger.info("授权网页加载完成，正在等待 8 秒钟让网站将凭证写入本地缓存文件...")
         await self.page.wait_for_timeout(8000)
         env_file = config.BASE_DIR / ".env"
